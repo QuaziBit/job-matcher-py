@@ -1,5 +1,35 @@
-import aiosqlite
 import os
+import sys
+
+# ── SQLite driver selection ────────────────────────────────────────────────────
+# Python's built-in sqlite3 depends on libsqlite3 being present on the OS.
+# On minimal Linux systems (stripped Docker images, some cloud environments)
+# it may be missing. pysqlite3-binary bundles its own SQLite for those cases.
+# On Windows and macOS, sqlite3 is always available — no fallback needed.
+#
+# To install the fallback on Linux only:
+#   pip install pysqlite3-binary
+#
+_sqlite3_ok = False
+if sys.platform != "win32" and sys.platform != "darwin":
+    # Only attempt fallback on Linux where sqlite3 may be absent
+    try:
+        import sqlite3 as _test
+        _test.connect(":memory:").execute("SELECT sqlite_version()").fetchone()
+        _sqlite3_ok = True
+    except Exception:
+        pass
+
+    if not _sqlite3_ok:
+        try:
+            import pysqlite3
+            sys.modules["sqlite3"] = pysqlite3
+            print("  ✓  SQLite  using bundled pysqlite3 (system sqlite3 unavailable)")
+        except ImportError:
+            print("  ⚠  SQLite  pysqlite3-binary not installed — run: pip install pysqlite3-binary")
+            print("             Falling back to system sqlite3 (may fail on minimal systems)")
+
+import aiosqlite
 
 
 def _db_path() -> str:
