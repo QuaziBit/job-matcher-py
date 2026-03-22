@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% set active_page = "jobs" %}
+
+{% block title %}Jobs — Job Matcher{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Job Tracker</h2>
+  <p>Add a job by URL or paste the description directly.</p>
+</div>
+
+<!-- Add Job — mode toggle -->
+<div style="margin-bottom: 12px;">
+  <div class="llm-toggle" style="display:inline-flex;">
+    <input type="radio" name="add-mode" id="mode-url"   value="url"   checked />
+    <label for="mode-url">URL</label>
+    <input type="radio" name="add-mode" id="mode-paste" value="paste" />
+    <label for="mode-paste">Paste</label>
+  </div>
+</div>
+
+<!-- URL form -->
+<form id="add-job-form" class="add-job-bar">
+  <input
+    type="text"
+    name="url"
+    placeholder="https://jobs.example.com/posting/12345"
+    autocomplete="off"
+    style="font-family: var(--font-mono); font-size: 12px;"
+  />
+  <button type="submit" class="btn btn-primary">Add Job</button>
+</form>
+
+<!-- Paste form (hidden by default) -->
+<div id="paste-job-form-wrap" class="card hidden" style="margin-bottom: 20px;">
+  <div class="form-grid" style="margin-bottom: 14px;">
+    <div class="form-row" style="margin:0;">
+      <label>Job Title</label>
+      <input type="text" id="paste-title" placeholder="e.g. DevSecOps Engineer" />
+    </div>
+    <div class="form-row" style="margin:0;">
+      <label>Company</label>
+      <input type="text" id="paste-company" placeholder="e.g. Acme Federal" />
+    </div>
+  </div>
+  <div class="form-row">
+    <label>Job Description</label>
+    <textarea
+      id="paste-description"
+      placeholder="Paste the full job description here…"
+      style="min-height: 160px; font-size: 12px;"
+    ></textarea>
+  </div>
+  <button class="btn btn-primary" id="paste-submit-btn" onclick="addJobManual()">Add Job</button>
+</div>
+
+<!-- Job List -->
+{% if jobs %}
+  {% for job in jobs %}
+  <a href="/job/{{ job.id }}" class="job-item" style="text-decoration:none;">
+    <!-- Score -->
+    <div>
+      {% if job.best_score %}
+        <div class="score-badge score-{{ job.best_score }}">{{ job.best_score }}</div>
+      {% else %}
+        <div class="score-badge score-none">—</div>
+      {% endif %}
+    </div>
+
+    <!-- Info -->
+    <div class="job-item-info">
+      <div class="job-title">
+        {{ job.title or "Untitled Job" }}
+      </div>
+      <div class="job-meta">
+        {% if job.company %}{{ job.company }}{% endif %}
+        {% if job.company and job.location %} · {% endif %}
+        {% if job.location %}{{ job.location }}{% endif %}
+        {% if not job.company and not job.location %}
+          {% if job.url.startswith('manual://') %}
+            pasted description
+          {% else %}
+            {{ job.url[:60] }}…
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Status + Provider -->
+    <div class="job-item-right">
+      {% if job.url.startswith('manual://') %}
+        <span class="provider-tag">manual</span>
+      {% elif job.provider %}
+        <span class="provider-tag">{{ job.provider }}</span>
+      {% endif %}
+      <span class="status-badge status-{{ job.status or 'not_applied' }}">
+        {{ (job.status or 'not applied').replace('_', ' ') }}
+      </span>
+    </div>
+  </a>
+  {% endfor %}
+
+{% else %}
+  <div class="empty">
+    <div class="empty-icon">⬡</div>
+    <p>No jobs tracked yet.<br>Add a job URL or paste a description above.</p>
+  </div>
+{% endif %}
+{% endblock %}

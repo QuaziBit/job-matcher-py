@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% set active_page = "jobs" %}
+
+{% block title %}{{ job.title or "Job Detail" }} — Job Matcher{% endblock %}
+
+{% block content %}
+<!-- Back -->
+<div style="margin-bottom: 20px;">
+  <a href="/" class="btn btn-ghost btn-sm">← Back</a>
+</div>
+
+<!-- Job Header -->
+<div class="page-header">
+  <div class="flex items-center gap-10" style="margin-bottom: 8px;">
+    <h2 style="flex:1; min-width:0;">{{ job.title or "Untitled Job" }}</h2>
+    <span id="status-badge" class="status-badge status-{{ application.status or 'not_applied' }}">
+      {{ (application.status or 'not applied').replace('_', ' ') }}
+    </span>
+    <button class="btn btn-danger btn-sm" onclick="deleteJob({{ job.id }})">Delete</button>
+  </div>
+  <div class="flex gap-10 text-dim text-mono text-xs">
+    {% if job.company %}<span>{{ job.company }}</span>{% endif %}
+    {% if job.location %}<span>· {{ job.location }}</span>{% endif %}
+    {% if not job.url.startswith('manual://') %}
+      <span>· <a href="{{ job.url }}" target="_blank" style="color: var(--amber);">View Original ↗</a></span>
+    {% else %}
+      <span style="color: var(--text-mute);">· pasted description</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="tab-container">
+  <div class="tabs">
+    <button class="tab active" data-tab="analysis">Analysis</button>
+    <button class="tab" data-tab="application">Application</button>
+    <button class="tab" data-tab="description">Job Description</button>
+  </div>
+
+  <!-- ── Analysis Tab ── -->
+  <div class="tab-content active" data-tab-content="analysis">
+
+    <!-- Run Analysis Card -->
+    <div class="card mb-16">
+      <div class="section-header">
+        <span class="section-title">Run New Analysis</span>
+      </div>
+
+      <div class="form-grid" style="margin-bottom: 14px;">
+        <div class="form-row" style="margin:0;">
+          <label>Resume Version</label>
+          {% if resumes %}
+            <select id="analyze-resume">
+              {% for r in resumes %}
+              <option value="{{ r.id }}">{{ r.label }}</option>
+              {% endfor %}
+            </select>
+          {% else %}
+            <div class="text-dim text-sm" style="padding: 8px 0;">
+              No resumes yet — <a href="/resumes" style="color:var(--amber);">add one first</a>
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="form-row" style="margin:0;">
+          <label>LLM Provider</label>
+          <div class="llm-toggle">
+            <input type="radio" name="provider" id="p-anthropic" value="anthropic" checked />
+            <label for="p-anthropic">Anthropic</label>
+            <input type="radio" name="provider" id="p-ollama" value="ollama" />
+            <label for="p-ollama">Ollama ({{ ollama_model }})</label>
+          </div>
+        </div>
+      </div>
+
+      <button
+        id="analyze-btn"
+        class="btn btn-primary"
+        onclick="analyzeJob({{ job.id }})"
+        {% if not resumes %}disabled{% endif %}
+      >Run Analysis</button>
+    </div>
+
+    <!-- Past Analyses -->
+    {% if analyses %}
+      <div class="section-title" style="margin-bottom: 12px;">Past Analyses</div>
+      {% for a in analyses %}
+      <div class="analysis-block" id="analysis-{{ a.id }}">
+        <div class="analysis-header">
+
+          <!-- Raw score -->
+          <div class="score-adjusted-wrap">
+            <div class="score-badge score-{{ a.score }}" title="Raw LLM score">{{ a.score }}</div>
+
+            {% if a.adjusted_score != a.score %}
+              <span class="score-arrow">→</span>
+              <div class="score-badge score-{{ a.adjusted_score }}" title="Penalty-adjusted score">{{ a.adjusted_score }}</div>
+              <span class="score-diff score-diff-down">-{{ a.score - a.adjusted_score }}</span>
+            {% else %}
+              <span class="score-diff score-diff-same">no penalty</span>
+            {% endif %}
+          </div>
+
+          <div class="score-meter" id="meter-{{ loop.index }}"></div>
+          <div class="analysis-meta" style="flex:1;">
+            {{ a.resume_label }} · {{ a.llm_provider }}{% if a.llm_model %} ({{ a.llm_model }}){% endif %} · {{ a.created_at[:16] }}
+          </div>
+
+          <!-- Delete this analysis -->
+          <button
+            class="btn btn-danger btn-sm"
+            style="margin-left: 10px; flex-shrink:0;"
+            onclick="deleteAnalysis({{ a.id }})"
+            title="Delete this analysis"
+          >✕</button>
+        </div>
+
+        <!-- Penalty breakdown -->
+        {% set pb = a.penalty_breakdown %}
+        {% if pb and pb.total_penalty %}
+        <div class="penalty-row">
+          {% if pb.blockers %}<span class="penalty-tag penalty-blocker">{{ pb.blockers }} blocker{{ 's' if pb.blockers > 1 else '' }} −{{ pb.blocker_penalty }}</span>{% endif %}
+          {% if pb.majors %}<span class="penalty-tag penalty-major">{{ pb.majors }} major{{ 's' if pb.majors > 1 else '' }} −{{ pb.major_penalty }}</span>{% endif %}
+          {% if pb.minors %}<span class="penalty-tag penalty-minor">{{ pb.minors }} minor{{ 's' if pb.minors > 1 else '' }} −{{ pb.minor_penalty }}</span>{% endif %}
+          {% if pb.count_penalty %}<span class="penalty-tag penalty-count">{{ pb.blockers + pb.majors + pb.minors }} gaps −{{ pb.count_penalty }}</span>{% endif %}
+        </div>
+        {% endif %}
+
+        {% if a.matched_skills %}
+        <div style="margin-top: 10px;">
+          <div class="text-xs text-dim" style="margin-bottom: 4px;">Matched skills</div>
+          <div class="pill-list">
+            {% for s in a.matched_skills %}<span class="pill pill-green">{{ s }}</span>{% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        {% if a.missing_skills %}
+        <div style="margin-top: 10px;">
+          <div class="text-xs text-dim" style="margin-bottom: 4px;">Missing / gaps</div>
+          <div class="pill-list">
+            {% for s in a.missing_skills %}
+              {% if s is mapping %}
+                <span class="pill {% if s.severity == 'blocker' %}pill-red{% elif s.severity == 'major' %}pill-orange{% else %}pill-dim{% endif %}"
+                      title="{{ s.severity }}">{{ s.skill }}</span>
+              {% else %}
+                <span class="pill pill-red">{{ s }}</span>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        {% if a.reasoning %}
+        <div class="reasoning">{{ a.reasoning }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty" style="padding: 32px 0;">
+        <p>No analyses yet. Select a resume and run your first analysis above.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Application Tab ── -->
+  <div class="tab-content" data-tab-content="application">
+    <div class="card">
+      <div class="form-row">
+        <label>Application Status</label>
+        <select id="app-status">
+          {% set statuses = [("not_applied","Not Applied"),("applied","Applied"),("interviewing","Interviewing"),("offered","Offered"),("rejected","Rejected")] %}
+          {% for val, label in statuses %}
+          <option value="{{ val }}" {% if application.status == val %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="section-title" style="margin: 18px 0 12px;">Recruiter Info</div>
+
+      <div class="form-grid">
+        <div class="form-row" style="margin:0 0 14px 0;">
+          <label>Name</label>
+          <input type="text" id="recruiter-name" value="{{ application.recruiter_name or '' }}" placeholder="Jane Smith" />
+        </div>
+        <div class="form-row" style="margin:0 0 14px 0;">
+          <label>Email</label>
+          <input type="email" id="recruiter-email" value="{{ application.recruiter_email or '' }}" placeholder="jane@company.com" />
+        </div>
+        <div class="form-row" style="margin:0 0 14px 0;">
+          <label>Phone</label>
+          <input type="text" id="recruiter-phone" value="{{ application.recruiter_phone or '' }}" placeholder="+1 (555) 000-0000" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label>Notes</label>
+        <textarea id="app-notes" placeholder="Follow-up dates, referrals, compensation details, interview notes…">{{ application.notes or '' }}</textarea>
+      </div>
+
+      <button id="save-app-btn" class="btn btn-primary" onclick="saveApplication({{ job.id }})">Save</button>
+    </div>
+  </div>
+
+  <!-- ── Description Tab ── -->
+  <div class="tab-content" data-tab-content="description">
+    <div class="card">
+      <div class="flex justify-between items-center mb-16">
+        <span class="section-title">Raw Scraped Description</span>
+        <button class="btn btn-ghost btn-sm" onclick="toggleDesc({{ job.id }})">Toggle</button>
+      </div>
+      <div id="desc-box" class="desc-box hidden"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Render score meters against adjusted score
+  document.querySelectorAll("[id^='meter-']").forEach(el => {
+    const block = el.closest(".analysis-block");
+    // Prefer adjusted score (second badge if present), fall back to first
+    const badges = block.querySelectorAll(".score-badge");
+    const badge = badges.length > 1 ? badges[1] : badges[0];
+    const score = parseInt(badge.textContent.trim());
+    if (!isNaN(score)) renderMeter(score, el);
+  });
+</script>
+{% endblock %}

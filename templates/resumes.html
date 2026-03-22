@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% set active_page = "resumes" %}
+
+{% block title %}Resumes — Job Matcher{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Resume Versions</h2>
+  <p>Store multiple tailored resumes and choose which to compare against each job.</p>
+</div>
+
+<!-- Add Resume -->
+<div class="card" style="margin-bottom: 28px;">
+  <div class="section-title" style="margin-bottom: 14px;">Add New Version</div>
+  <form id="add-resume-form">
+    <div class="form-row">
+      <label>Label</label>
+      <input type="text" name="label" placeholder="e.g. DevSecOps v2, Full-Stack General, Federal Contractor" />
+    </div>
+    <div class="form-row">
+      <label>Resume Text</label>
+      <textarea
+        name="content"
+        placeholder="Paste your full resume text here…"
+        style="min-height: 200px; font-family: var(--font-mono); font-size: 11px;"
+      ></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Save Resume</button>
+  </form>
+</div>
+
+<!-- Saved Resumes -->
+{% if resumes %}
+  <div class="section-title" style="margin-bottom: 14px;">Saved Versions ({{ resumes | length }})</div>
+  {% for r in resumes %}
+  <div class="card card-sm" style="margin-bottom: 10px;">
+    <div class="flex justify-between items-center">
+      <div>
+        <div style="font-weight: 500; font-size: 14px;">{{ r.label }}</div>
+        <div class="text-xs text-dim text-mono mt-4">
+          {{ r.created_at[:16] }} · {{ r.content | length }} chars
+        </div>
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="deleteResume({{ r.id }})">Delete</button>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">
+    <div class="empty-icon">◈</div>
+    <p>No resumes saved yet.<br>Add your first resume version above.</p>
+  </div>
+{% endif %}
+{% endblock %}

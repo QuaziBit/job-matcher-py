@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Job Matcher{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark">// job-matcher</div>
+        <h1>Resume Match</h1>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="/" class="nav-link {% if active_page == 'jobs' %}active{% endif %}">
+          <span class="icon">⬡</span> Jobs
+        </a>
+        <a href="/resumes" class="nav-link {% if active_page == 'resumes' %}active{% endif %}">
+          <span class="icon">◈</span> Resumes
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        SQLite · Local · v1.0
+      </div>
+    </aside>
+
+    <!-- Content -->
+    <main class="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <div id="toast"></div>
+  <script src="/static/js/app.js"></script>
+  {% block extra_js %}{% endblock %}
+</body>
+</html>
