@@ -6,6 +6,35 @@
 
 ---
 
+## Screenshots
+
+<div align="center">
+  <img src="screenshots/01-launcher.jpg" width="350"/>
+  <p><em>Launcher — live health checks, model selector, Start / Restart / Stop</em></p>
+</div>
+
+<div align="center">
+  <img src="screenshots/05-job-tracker.jpg" width="800"/>
+  <p><em>Job Tracker — jobs list with score badges and status tags</em></p>
+</div>
+
+<div align="center">
+  <img src="screenshots/03-analysis-ollama-2.jpg" width="800"/>
+  <p><em>Ollama (gemma3:27b) — analysis tab with resume selector and LLM provider toggle</em></p>
+</div>
+
+<div align="center">
+  <img src="screenshots/03-analysis-ollama-1.jpg" width="800"/>
+  <p><em>Ollama (llama3.1:8b) — same job, lighter penalty, different model perspective</em></p>
+</div>
+
+<div align="center">
+  <img src="screenshots/02-analysis-anthropic.jpg" width="800"/>
+  <p><em>Anthropic (claude-opus-4-5) — penalty pipeline with severity-weighted gaps</em></p>
+</div>
+
+---
+
 ## What It Does
 
 - Scrapes job postings from a URL (Indeed, LinkedIn, Greenhouse, Workday, etc.)
