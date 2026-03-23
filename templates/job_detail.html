@@ -79,6 +79,60 @@
         onclick="analyzeJob({{ job.id }})"
         {% if not resumes %}disabled{% endif %}
       >Run Analysis</button>
+
+      <!-- Scoring explanation matrix -->
+      <details class="score-explainer">
+        <summary>How are scores calculated?</summary>
+        <div class="score-explainer-body">
+          <div class="score-explainer-section">
+            <div class="score-explainer-label">Raw Score</div>
+            <div class="score-explainer-desc">LLM evaluates overall resume-to-job fit on a 1–5 scale.</div>
+          </div>
+          <div class="score-explainer-section">
+            <div class="score-explainer-label">Adjusted Score</div>
+            <div class="score-explainer-desc">Raw score minus penalties based on detected skill gaps.</div>
+          </div>
+          <table class="score-explainer-table">
+            <thead>
+              <tr>
+                <th>Gap Type</th>
+                <th>Penalty</th>
+                <th>Cap</th>
+                <th>Examples</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="penalty-tag penalty-blocker">Blocker</span></td>
+                <td>−2 each</td>
+                <td>max −3</td>
+                <td>Clearance, citizenship, mandatory certs</td>
+              </tr>
+              <tr>
+                <td><span class="penalty-tag penalty-major">Major</span></td>
+                <td>−1 each</td>
+                <td>max −2</td>
+                <td>Significant missing skills</td>
+              </tr>
+              <tr>
+                <td><span class="penalty-tag penalty-minor">Minor</span></td>
+                <td>−1 per 2</td>
+                <td>max −1</td>
+                <td>Nice-to-have or learnable gaps</td>
+              </tr>
+              <tr>
+                <td><span class="penalty-tag penalty-count">Count</span></td>
+                <td>−1 flat</td>
+                <td>max −1</td>
+                <td>More than 6 total gaps</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="score-explainer-example">
+            Example: Raw 4 &middot; 1 blocker (−2) &middot; 3 minors (−1) = Adjusted <strong>1</strong>
+          </div>
+        </div>
+      </details>
     </div>
 
     <!-- Past Analyses -->

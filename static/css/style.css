@@ -365,6 +365,88 @@ label {
 .analysis-meta { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); }
 .reasoning { font-size: 13px; color: var(--text); line-height: 1.7; margin-top: 10px; }
 
+/* ── Score explainer ─────────────────────────────────────────────────────── */
+.score-explainer {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.score-explainer summary {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg3);
+  list-style: none;
+}
+.score-explainer summary::-webkit-details-marker { display: none; }
+.score-explainer summary::before {
+  content: '▶ ';
+  font-size: 9px;
+  color: var(--amber);
+}
+.score-explainer[open] summary::before { content: '▼ '; }
+.score-explainer summary:hover { color: var(--text); }
+.score-explainer-body {
+  padding: 14px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+}
+.score-explainer-section {
+  margin-bottom: 10px;
+}
+.score-explainer-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--amber);
+  margin-bottom: 2px;
+  font-family: var(--font-mono);
+}
+.score-explainer-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.score-explainer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 10px 0;
+}
+.score-explainer-table th {
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-mute);
+  border-bottom: 1px solid var(--border);
+}
+.score-explainer-table td {
+  padding: 6px 10px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.score-explainer-table tr:last-child td { border-bottom: none; }
+.score-explainer-table tr:hover td { background: var(--bg3); }
+.score-explainer-example {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--bg3);
+  border-radius: var(--radius);
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
 /* ── Score meter ── */
 .score-meter { display: flex; gap: 4px; align-items: center; }
 .score-pip {
