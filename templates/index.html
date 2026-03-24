@@ -21,17 +21,12 @@
 
 <!-- URL form -->
 <form id="add-job-form" class="add-job-bar">
-  <input
-    type="text"
-    name="url"
-    placeholder="https://jobs.example.com/posting/12345"
-    autocomplete="off"
-    style="font-family: var(--font-mono); font-size: 12px;"
-  />
+  <input type="text" name="url" placeholder="https://jobs.example.com/posting/12345"
+         autocomplete="off" style="font-family: var(--font-mono); font-size: 12px;" />
   <button type="submit" class="btn btn-primary">Add Job</button>
 </form>
 
-<!-- Paste form (hidden by default) -->
+<!-- Paste form -->
 <div id="paste-job-form-wrap" class="card hidden" style="margin-bottom: 20px;">
   <div class="form-grid" style="margin-bottom: 14px;">
     <div class="form-row" style="margin:0;">
@@ -45,65 +40,93 @@
   </div>
   <div class="form-row">
     <label>Job Description</label>
-    <textarea
-      id="paste-description"
-      placeholder="Paste the full job description here…"
-      style="min-height: 160px; font-size: 12px;"
-    ></textarea>
+    <textarea id="paste-description" placeholder="Paste the full job description here…"
+              style="min-height: 160px; font-size: 12px;"></textarea>
   </div>
   <button class="btn btn-primary" id="paste-submit-btn" onclick="addJobManual()">Add Job</button>
 </div>
 
-<!-- Job List -->
-{% if jobs %}
-  {% for job in jobs %}
-  <a href="/job/{{ job.id }}" class="job-item" style="text-decoration:none;">
-    <!-- Score -->
-    <div>
-      {% if job.best_score %}
-        <div class="score-badge score-{{ job.best_score }}">{{ job.best_score }}</div>
-      {% else %}
-        <div class="score-badge score-none">—</div>
-      {% endif %}
-    </div>
+<!-- Search and filter bar -->
+<div class="filter-bar">
+  <input type="text" id="filter-search" placeholder="Search title or company…" autocomplete="off" />
+  <select id="filter-status">
+    <option value="">All Statuses</option>
+    <option value="not_applied">Not Applied</option>
+    <option value="applied">Applied</option>
+    <option value="interviewing">Interviewing</option>
+    <option value="offered">Offered</option>
+    <option value="rejected">Rejected</option>
+  </select>
+  <select id="filter-score">
+    <option value="">Any Score</option>
+    <option value="5">5 only</option>
+    <option value="4">4 or higher</option>
+    <option value="3">3 or higher</option>
+    <option value="2">2 or higher</option>
+    <option value="1">1 or higher</option>
+    <option value="0">Not scored</option>
+  </select>
+  <select id="filter-provider">
+    <option value="">All Providers</option>
+    <option value="anthropic">Anthropic</option>
+    <option value="ollama">Ollama</option>
+    <option value="manual">Manual</option>
+  </select>
+  <button class="btn btn-ghost btn-sm" onclick="clearFilters()" id="clear-btn" style="display:none;">
+    ✕ Clear
+  </button>
+</div>
 
-    <!-- Info -->
-    <div class="job-item-info">
-      <div class="job-title">
-        {{ job.title or "Untitled Job" }}
-      </div>
-      <div class="job-meta">
-        {% if job.company %}{{ job.company }}{% endif %}
-        {% if job.company and job.location %} · {% endif %}
-        {% if job.location %}{{ job.location }}{% endif %}
-        {% if not job.company and not job.location %}
-          {% if job.url.startswith('manual://') %}
-            pasted description
-          {% else %}
-            {{ job.url[:60] }}…
-          {% endif %}
-        {% endif %}
-      </div>
-    </div>
+<!-- Jobs list — populated by JS -->
+<div id="jobs-list"></div>
 
-    <!-- Status + Provider -->
-    <div class="job-item-right">
-      {% if job.url.startswith('manual://') %}
-        <span class="provider-tag">manual</span>
-      {% elif job.provider %}
-        <span class="provider-tag">{{ job.provider }}</span>
-      {% endif %}
-      <span class="status-badge status-{{ job.status or 'not_applied' }}">
-        {{ (job.status or 'not applied').replace('_', ' ') }}
-      </span>
-    </div>
-  </a>
-  {% endfor %}
-
-{% else %}
-  <div class="empty">
-    <div class="empty-icon">⬡</div>
-    <p>No jobs tracked yet.<br>Add a job URL or paste a description above.</p>
+<!-- Pagination bar -->
+<div class="pagination-bar" id="pagination-bar" style="display:none;">
+  <span class="pagination-info" id="pagination-info"></span>
+  <div class="pagination-controls">
+    <button class="btn btn-ghost btn-sm" id="prev-btn" onclick="changePage(-1)" disabled>← Prev</button>
+    <span id="page-indicator" class="pagination-pages"></span>
+    <button class="btn btn-ghost btn-sm" id="next-btn" onclick="changePage(1)" disabled>Next →</button>
   </div>
-{% endif %}
+  <select id="per-page" onchange="changePerPage()" class="pagination-perpage">
+    <option value="5">5 per page</option>
+    <option value="10">10 per page</option>
+    <option value="25" selected>25 per page</option>
+    <option value="50">50 per page</option>
+    <option value="0">All</option>
+  </select>
+</div>
+
+<!-- Loading -->
+<div id="jobs-loading" class="empty" style="display:none;">
+  <div class="empty-icon">⬡</div>
+  <p>Loading…</p>
+</div>
+
+<!-- Error state -->
+<div id="jobs-error" class="jobs-error hidden">
+  <div class="jobs-error-icon">✗</div>
+  <div>
+    <div class="jobs-error-title">Failed to load jobs</div>
+    <div class="jobs-error-text" id="jobs-error-text"></div>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="fetchJobs()">
+      ↺ Retry
+    </button>
+  </div>
+</div>
+
+<!-- No results -->
+<div id="no-results" class="empty hidden">
+  <div class="empty-icon">⬡</div>
+  <p>No jobs match your filters.<br>
+    <a href="#" onclick="clearFilters(); return false;" style="color:var(--amber);">Clear filters</a>
+  </p>
+</div>
+
+<!-- Empty state -->
+<div id="empty-state" class="empty hidden">
+  <div class="empty-icon">⬡</div>
+  <p>No jobs tracked yet.<br>Add a job URL or paste a description above.</p>
+</div>
+
 {% endblock %}

@@ -408,3 +408,258 @@ document.addEventListener("DOMContentLoaded", () => {
     log("init", "#add-resume-form not on this page");
   }
 });
+
+// =============================================== //
+// == Search, Filter & Pagination ================ //
+// =============================================== //
+
+let _currentPage = 1;
+let _perPage     = 25;
+let _searchTimer = null;
+
+// ── Fetch jobs from server ────────────────────────────────────────────────────
+async function fetchJobs() {
+  const search   = (document.getElementById('filter-search')   || {value:''}).value.trim();
+  const status   = (document.getElementById('filter-status')   || {value:''}).value;
+  const score    = (document.getElementById('filter-score')    || {value:''}).value;
+  const provider = (document.getElementById('filter-provider') || {value:''}).value;
+
+  const params = new URLSearchParams({ page: _currentPage, per_page: _perPage });
+  if (search)   params.set('search',   search);
+  if (status)   params.set('status',   status);
+  if (score)    params.set('score',    score);
+  if (provider) params.set('provider', provider);
+
+  // Sync URL bar
+  const newURL = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+  history.pushState({}, '', newURL);
+
+  // Show/hide clear button
+  const clearBtn = document.getElementById('clear-btn');
+  if (clearBtn) clearBtn.style.display = (search || status || score || provider) ? 'inline-flex' : 'none';
+
+  log('fetchJobs', `page=${_currentPage} per_page=${_perPage} search=${search} status=${status} score=${score} provider=${provider}`);
+  showLoading(true);
+
+  try {
+    const res = await fetch('/api/jobs/list?' + params);
+
+    if (!res.ok) {
+      let errMsg = `Server error ${res.status}`;
+      try { const d = await res.json(); errMsg = d.error || errMsg; } catch(_) {}
+      logErr('fetchJobs', `HTTP ${res.status}: ${errMsg}`);
+      showError(`Failed to load jobs: ${errMsg}`);
+      return;
+    }
+
+    let data;
+    try { data = await res.json(); } catch(e) {
+      logErr('fetchJobs', 'failed to parse JSON:', e);
+      showError('Failed to load jobs: server returned invalid data.');
+      return;
+    }
+
+    if (typeof data.total === 'undefined' || !Array.isArray(data.jobs)) {
+      logErr('fetchJobs', 'unexpected response shape:', data);
+      showError('Failed to load jobs: unexpected response from server.');
+      return;
+    }
+
+    log('fetchJobs', `total=${data.total} pages=${data.total_pages}`);
+    renderJobs(data);
+
+  } catch(err) {
+    logErr('fetchJobs', 'fetch threw:', err);
+    showError('Could not reach the server. Is Job Matcher still running?');
+  }
+}
+
+// ── Render jobs list ──────────────────────────────────────────────────────────
+function renderJobs(data) {
+  showLoading(false);
+
+  const list       = document.getElementById('jobs-list');
+  const noResults  = document.getElementById('no-results');
+  const emptyState = document.getElementById('empty-state');
+  const pagBar     = document.getElementById('pagination-bar');
+
+  if (!list) return;
+
+  if (data.total === 0 && !hasActiveFilter()) {
+    list.innerHTML = '';
+    if (noResults)  noResults.classList.add('hidden');
+    if (emptyState) emptyState.classList.remove('hidden');
+    if (pagBar)     pagBar.style.display = 'none';
+    return;
+  }
+
+  if (data.jobs.length === 0) {
+    list.innerHTML = '';
+    if (noResults)  noResults.classList.remove('hidden');
+    if (emptyState) emptyState.classList.add('hidden');
+    if (pagBar)     pagBar.style.display = 'none';
+    return;
+  }
+
+  if (noResults)  noResults.classList.add('hidden');
+  if (emptyState) emptyState.classList.add('hidden');
+
+  list.innerHTML = data.jobs.map(job => {
+    if (!job || typeof job.id === 'undefined') { logErr('renderJobs', 'malformed job:', job); return ''; }
+
+    const score      = job.adjusted_score || job.best_score;
+    const scoreBadge = score
+      ? `<div class="score-badge score-${score}">${score}</div>`
+      : `<div class="score-badge score-none">—</div>`;
+
+    const isManual   = job.is_manual || (job.url || '').startsWith('manual://');
+    const providerTag = isManual
+      ? `<span class="provider-tag">manual</span>`
+      : (job.provider ? `<span class="provider-tag">${job.provider}</span>` : '');
+
+    const status = job.status || 'not_applied';
+    const statusLabel = status.replace(/_/g, ' ');
+    const company  = job.company || '';
+    const location = job.location || '';
+    const sep      = company && location ? ' · ' : '';
+    const meta     = (company + sep + location) ||
+                     (isManual ? 'pasted description' : (job.url || '').substring(0, 60) + '…');
+
+    return `<a href="/job/${job.id}" class="job-item" style="text-decoration:none;">
+      <div>${scoreBadge}</div>
+      <div class="job-item-info">
+        <div class="job-title">${job.title || 'Untitled Job'}</div>
+        <div class="job-meta">${meta}</div>
+      </div>
+      <div class="job-item-right">
+        ${providerTag}
+        <span class="status-badge status-${status}">${statusLabel}</span>
+      </div>
+    </a>`;
+  }).join('');
+
+  renderPagination(data);
+}
+
+// ── Render pagination ─────────────────────────────────────────────────────────
+function renderPagination(data) {
+  const pagBar    = document.getElementById('pagination-bar');
+  const info      = document.getElementById('pagination-info');
+  const indicator = document.getElementById('page-indicator');
+  const prevBtn   = document.getElementById('prev-btn');
+  const nextBtn   = document.getElementById('next-btn');
+
+  if (!pagBar) return;
+
+  const perPage    = data.per_page === 0 ? data.total : data.per_page;
+  const start      = ((data.page - 1) * perPage) + 1;
+  const end        = Math.min(data.page * perPage, data.total);
+  const totalPages = data.total_pages;
+
+  pagBar.style.display = data.total > 0 ? 'flex' : 'none';
+
+  if (info)      info.textContent = `Showing ${start}–${end} of ${data.total} job${data.total !== 1 ? 's' : ''}`;
+  if (indicator) indicator.textContent = totalPages > 1 ? `Page ${data.page} of ${totalPages}` : '';
+  if (prevBtn)   prevBtn.disabled = data.page <= 1;
+  if (nextBtn)   nextBtn.disabled = data.page >= totalPages;
+
+  if (totalPages <= 1 && _perPage !== 0) {
+    pagBar.style.display = 'none';
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function showLoading(show) {
+  const loading = document.getElementById('jobs-loading');
+  const list    = document.getElementById('jobs-list');
+  const errBox  = document.getElementById('jobs-error');
+  if (loading) loading.style.display = show ? 'block' : 'none';
+  if (errBox)  errBox.classList.add('hidden');
+  if (list && show) list.innerHTML = '';
+}
+
+function showError(msg) {
+  showLoading(false);
+  const errBox  = document.getElementById('jobs-error');
+  const errText = document.getElementById('jobs-error-text');
+  const list    = document.getElementById('jobs-list');
+  const pagBar  = document.getElementById('pagination-bar');
+  const noRes   = document.getElementById('no-results');
+  const empty   = document.getElementById('empty-state');
+
+  if (list)   list.innerHTML = '';
+  if (pagBar) pagBar.style.display = 'none';
+  if (noRes)  noRes.classList.add('hidden');
+  if (empty)  empty.classList.add('hidden');
+
+  if (errBox && errText) {
+    errText.textContent = msg;
+    errBox.classList.remove('hidden');
+  } else {
+    toast(msg, 'error');
+  }
+  logErr('showError', msg);
+}
+
+function hasActiveFilter() {
+  return ['filter-search','filter-status','filter-score','filter-provider']
+    .some(id => { const el = document.getElementById(id); return el && el.value !== ''; });
+}
+
+// ── User actions ──────────────────────────────────────────────────────────────
+function applyFilters() { _currentPage = 1; fetchJobs(); }
+function applyFiltersDebounced() { clearTimeout(_searchTimer); _searchTimer = setTimeout(applyFilters, 300); }
+function changePage(dir) { _currentPage += dir; fetchJobs(); }
+
+function changePerPage() {
+  const sel = document.getElementById('per-page');
+  _perPage = sel ? parseInt(sel.value) : 25;
+  _currentPage = 1;
+  fetchJobs();
+  log('changePerPage', `perPage=${_perPage}`);
+}
+
+function clearFilters() {
+  ['filter-search','filter-status','filter-score','filter-provider'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  applyFilters();
+}
+
+// ── Restore from URL ──────────────────────────────────────────────────────────
+function restoreFromURL() {
+  const params = new URLSearchParams(window.location.search);
+  const set = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+
+  set('filter-search',   params.get('search'));
+  set('filter-status',   params.get('status'));
+  set('filter-score',    params.get('score'));
+  set('filter-provider', params.get('provider'));
+
+  _currentPage = parseInt(params.get('page')) || 1;
+
+  const pp = params.get('per_page');
+  _perPage = (pp !== null && pp !== '') ? parseInt(pp) : 25;
+
+  const perPageSel = document.getElementById('per-page');
+  if (perPageSel) perPageSel.value = String(_perPage);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  const jobsList = document.getElementById('jobs-list');
+  if (!jobsList) return; // not on jobs page
+
+  const searchEl = document.getElementById('filter-search');
+  if (searchEl) searchEl.addEventListener('input', applyFiltersDebounced);
+
+  ['filter-status','filter-score','filter-provider'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', applyFilters);
+  });
+
+  window.addEventListener('popstate', () => { restoreFromURL(); fetchJobs(); });
+
+  restoreFromURL();
+  fetchJobs();
+});

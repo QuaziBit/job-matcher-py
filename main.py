@@ -149,23 +149,11 @@ templates = Jinja2Templates(directory="templates")
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, db: aiosqlite.Connection = Depends(get_db)):
-    async with db.execute("""
-        SELECT j.id, j.url, j.title, j.company, j.location, j.scraped_at,
-               a.status,
-               (SELECT COALESCE(adjusted_score, score) FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as best_score,
-               (SELECT llm_provider FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as provider
-        FROM jobs j
-        LEFT JOIN applications a ON a.job_id = j.id
-        ORDER BY j.scraped_at DESC
-    """) as cur:
-        jobs = [dict(r) for r in await cur.fetchall()]
-
     async with db.execute("SELECT id, label FROM resumes ORDER BY created_at DESC") as cur:
         resumes = [dict(r) for r in await cur.fetchall()]
-
+    # Jobs are loaded client-side via /api/jobs/list
     return templates.TemplateResponse("index.html", {
         "request": request,
-        "jobs": jobs,
         "resumes": resumes,
     })
 
@@ -224,6 +212,146 @@ async def resumes_page(request: Request, db: aiosqlite.Connection = Depends(get_
 
 
 # ─── API Endpoints ─────────────────────────────────────────────────────────────
+
+@app.get("/api/jobs/list")
+async def jobs_list(
+    request: Request,
+    db: aiosqlite.Connection = Depends(get_db),
+    page:     int = 1,
+    per_page: int = 25,
+    search:   str = "",
+    status:   str = "",
+    score:    str = "",
+    provider: str = "",
+):
+    import logging
+    logger = logging.getLogger("jobs_list")
+
+    # ── Validate inputs ───────────────────────────────────────────────────────
+    if page < 1:
+        return JSONResponse({"error": f"invalid page {page!r} — must be a positive integer"}, status_code=400)
+    if per_page < 0:
+        return JSONResponse({"error": f"invalid per_page {per_page!r} — must be 0 (all) or a positive integer"}, status_code=400)
+
+    valid_statuses = {"", "not_applied", "applied", "interviewing", "offered", "rejected"}
+    if status not in valid_statuses:
+        return JSONResponse({"error": f"invalid status {status!r} — must be one of: not_applied, applied, interviewing, offered, rejected"}, status_code=400)
+
+    valid_scores = {"", "0", "1", "2", "3", "4", "5"}
+    if score not in valid_scores:
+        return JSONResponse({"error": f"invalid score {score!r} — must be one of: 0, 1, 2, 3, 4, 5"}, status_code=400)
+
+    valid_providers = {"", "anthropic", "ollama", "manual"}
+    if provider not in valid_providers:
+        return JSONResponse({"error": f"invalid provider {provider!r} — must be one of: anthropic, ollama, manual"}, status_code=400)
+
+    logger.info(f"→ /api/jobs/list page={page} per_page={per_page} search={search!r} status={status!r} score={score!r} provider={provider!r}")
+
+    # ── Build WHERE clause ────────────────────────────────────────────────────
+    where = []
+    args  = []
+
+    if search:
+        where.append("(LOWER(j.title) LIKE ? OR LOWER(j.company) LIKE ?)")
+        like = f"%{search.lower()}%"
+        args += [like, like]
+
+    if status:
+        where.append("COALESCE(a.status, 'not_applied') = ?")
+        args.append(status)
+
+    if provider:
+        if provider == "manual":
+            where.append("j.url LIKE 'manual://%'")
+        else:
+            where.append(
+                "(SELECT llm_provider FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) = ?"
+            )
+            args.append(provider)
+
+    if score:
+        if score == "0":
+            logger.info("→ score filter = not scored")
+            where.append("(SELECT COUNT(*) FROM analyses WHERE job_id = j.id) = 0")
+        elif score == "5":
+            logger.info("→ score filter = exactly 5")
+            where.append(
+                "COALESCE((SELECT adjusted_score FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1),"
+                "(SELECT score FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1), 0) = 5"
+            )
+        else:
+            min_score = int(score)
+            logger.info(f"→ score filter >= {min_score}")
+            where.append(
+                "COALESCE((SELECT adjusted_score FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1),"
+                "(SELECT score FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1), 0) >= ?"
+            )
+            args.append(min_score)
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    base_query = f"""
+        SELECT j.id, j.url, j.title, j.company, j.location, j.scraped_at,
+               COALESCE(a.status, 'not_applied') as status,
+               (SELECT score          FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as best_score,
+               (SELECT adjusted_score FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as adjusted_score,
+               (SELECT llm_provider   FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as provider
+        FROM jobs j
+        LEFT JOIN applications a ON a.job_id = j.id
+        {where_sql}
+        ORDER BY j.scraped_at DESC
+    """
+
+    # ── Count total ───────────────────────────────────────────────────────────
+    count_query = f"SELECT COUNT(*) FROM jobs j LEFT JOIN applications a ON a.job_id = j.id {where_sql}"
+    try:
+        async with db.execute(count_query, args) as cur:
+            row = await cur.fetchone()
+            total = row[0] if row else 0
+    except Exception as e:
+        logger.error(f"✗ count query failed: {e}")
+        return JSONResponse({"error": "Failed to load jobs from database. Check the terminal for details."}, status_code=500)
+
+    # ── Pagination ────────────────────────────────────────────────────────────
+    total_pages = 1
+    if per_page > 0 and total > 0:
+        total_pages = (total + per_page - 1) // per_page
+
+    # Clamp page to valid range
+    if page > total_pages and total_pages > 0:
+        logger.info(f"→ page {page} out of range (max {total_pages}) — clamping")
+        page = total_pages
+
+    paginated_query = base_query
+    paginated_args  = list(args)
+    if per_page > 0:
+        offset = (page - 1) * per_page
+        paginated_query += " LIMIT ? OFFSET ?"
+        paginated_args  += [per_page, offset]
+
+    # ── Fetch jobs ────────────────────────────────────────────────────────────
+    try:
+        async with db.execute(paginated_query, paginated_args) as cur:
+            rows = await cur.fetchall()
+            jobs = [dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"✗ jobs query failed: {e}")
+        return JSONResponse({"error": "Failed to load jobs from database. Check the terminal for details."}, status_code=500)
+
+    # Mark manual jobs
+    for job in jobs:
+        job["is_manual"] = (job.get("url") or "").startswith("manual://")
+
+    logger.info(f"✓ /api/jobs/list total={total} page={page}/{total_pages} returned={len(jobs)}")
+
+    return JSONResponse({
+        "jobs":        jobs,
+        "total":       total,
+        "page":        page,
+        "per_page":    per_page,
+        "total_pages": total_pages,
+    })
+
 
 @app.post("/api/jobs/add")
 async def add_job(url: str = Form(...), db: aiosqlite.Connection = Depends(get_db)):
