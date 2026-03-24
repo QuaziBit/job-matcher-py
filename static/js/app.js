@@ -539,6 +539,13 @@ function renderJobs(data) {
   }).join('');
 
   renderPagination(data);
+
+  // Save filter state when clicking a job — so Back restores it
+  list.querySelectorAll('a.job-item').forEach(link => {
+    link.addEventListener('click', () => {
+      saveFilterState();
+    });
+  });
 }
 
 // ── Render pagination ─────────────────────────────────────────────────────────
@@ -627,22 +634,84 @@ function clearFilters() {
 }
 
 // ── Restore from URL ──────────────────────────────────────────────────────────
+function saveFilterState() {
+  // Save current filter state to sessionStorage before navigating away
+  const state = {
+    search:   (document.getElementById('filter-search')   || {value:''}).value,
+    status:   (document.getElementById('filter-status')   || {value:''}).value,
+    score:    (document.getElementById('filter-score')    || {value:''}).value,
+    provider: (document.getElementById('filter-provider') || {value:''}).value,
+    page:     _currentPage,
+    per_page: _perPage,
+  };
+  try {
+    sessionStorage.setItem('jobFilterState', JSON.stringify(state));
+    log('saveFilterState', 'saved:', JSON.stringify(state));
+  } catch(e) {
+    logErr('saveFilterState', 'sessionStorage write failed:', e);
+  }
+}
+
 function restoreFromURL() {
-  const params = new URLSearchParams(window.location.search);
-  const set = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+  const rawSearch = window.location.search;
+  log('restoreFromURL', 'URL search string:', rawSearch);
 
-  set('filter-search',   params.get('search'));
-  set('filter-status',   params.get('status'));
-  set('filter-score',    params.get('score'));
-  set('filter-provider', params.get('provider'));
+  const params = new URLSearchParams(rawSearch);
 
-  _currentPage = parseInt(params.get('page')) || 1;
+  // Check if URL has any filter params (not just page/per_page)
+  const hasFilters = params.get('search') || params.get('status') ||
+                     params.get('score')  || params.get('provider');
+  const hasPageParams = params.get('page') || params.get('per_page');
 
-  const pp = params.get('per_page');
-  _perPage = (pp !== null && pp !== '') ? parseInt(pp) : 25;
+  log('restoreFromURL', 'hasFilters=' + hasFilters + ' hasPageParams=' + hasPageParams);
+
+  // If URL has no filter params, try sessionStorage (back navigation)
+  let saved = null;
+  if (!hasFilters) {
+    try {
+      const raw = sessionStorage.getItem('jobFilterState');
+      if (raw) {
+        saved = JSON.parse(raw);
+        log('restoreFromURL', 'found sessionStorage state:', JSON.stringify(saved));
+      }
+    } catch(e) {
+      logErr('restoreFromURL', 'sessionStorage read failed:', e);
+    }
+  }
+
+  // Set filter dropdowns — from URL first, then sessionStorage
+  const getValue = (key) => {
+    const fromURL = params.get(key);
+    if (fromURL !== null) return fromURL;
+    return saved ? (saved[key] || '') : '';
+  };
+
+  const setEl = (id, val) => {
+    const el = document.getElementById(id);
+    if (!el) { logErr('restoreFromURL', 'element not found: #' + id); return; }
+    el.value = val || '';
+    log('restoreFromURL', id + ' = ' + JSON.stringify(el.value));
+  };
+
+  setEl('filter-search',   getValue('search'));
+  setEl('filter-status',   getValue('status'));
+  setEl('filter-score',    getValue('score'));
+  setEl('filter-provider', getValue('provider'));
+
+  // Restore page and per_page
+  if (hasPageParams) {
+    _currentPage = parseInt(params.get('page')) || 1;
+    const pp = params.get('per_page');
+    _perPage = (pp !== null && pp !== '') ? parseInt(pp) : 25;
+  } else if (saved) {
+    _currentPage = saved.page     || 1;
+    _perPage     = (saved.per_page !== undefined && saved.per_page !== null) ? saved.per_page : 25;
+  }
 
   const perPageSel = document.getElementById('per-page');
   if (perPageSel) perPageSel.value = String(_perPage);
+
+  log('restoreFromURL', 'final: page=' + _currentPage + ' perPage=' + _perPage);
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
