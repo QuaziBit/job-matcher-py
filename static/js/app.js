@@ -417,7 +417,9 @@ let _currentPage = 1;
 let _perPage     = 25;
 let _searchTimer = null;
 
-// ── Fetch jobs from server ────────────────────────────────────────────────────
+// =============================================== //
+// == Fetch jobs from server ===================== //
+// =============================================== //
 async function fetchJobs() {
   const search   = (document.getElementById('filter-search')   || {value:''}).value.trim();
   const status   = (document.getElementById('filter-status')   || {value:''}).value;
@@ -474,7 +476,9 @@ async function fetchJobs() {
   }
 }
 
-// ── Render jobs list ──────────────────────────────────────────────────────────
+// =============================================== //
+// == Render jobs list =========================== //
+// =============================================== //
 function renderJobs(data) {
   showLoading(false);
 
@@ -548,7 +552,9 @@ function renderJobs(data) {
   });
 }
 
-// ── Render pagination ─────────────────────────────────────────────────────────
+// =============================================== //
+// == Render pagination ========================== //
+// =============================================== //
 function renderPagination(data) {
   const pagBar    = document.getElementById('pagination-bar');
   const info      = document.getElementById('pagination-info');
@@ -575,7 +581,9 @@ function renderPagination(data) {
   }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// =============================================== //
+// == Helpers ==================================== //
+// =============================================== //
 function showLoading(show) {
   const loading = document.getElementById('jobs-loading');
   const list    = document.getElementById('jobs-list');
@@ -613,7 +621,9 @@ function hasActiveFilter() {
     .some(id => { const el = document.getElementById(id); return el && el.value !== ''; });
 }
 
-// ── User actions ──────────────────────────────────────────────────────────────
+// =============================================== //
+// == User actions =============================== //
+// =============================================== //
 function applyFilters() { _currentPage = 1; fetchJobs(); }
 function applyFiltersDebounced() { clearTimeout(_searchTimer); _searchTimer = setTimeout(applyFilters, 300); }
 function changePage(dir) { _currentPage += dir; fetchJobs(); }
@@ -633,7 +643,9 @@ function clearFilters() {
   applyFilters();
 }
 
-// ── Restore from URL ──────────────────────────────────────────────────────────
+// =============================================== //
+// == Restore from URL =========================== //
+// =============================================== //
 function saveFilterState() {
   // Save current filter state to sessionStorage before navigating away
   const state = {
@@ -714,7 +726,9 @@ function restoreFromURL() {
   log('restoreFromURL', 'final: page=' + _currentPage + ' perPage=' + _perPage);
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// =============================================== //
+// == Init ======================================= //
+// =============================================== //
 document.addEventListener('DOMContentLoaded', () => {
   const jobsList = document.getElementById('jobs-list');
   if (!jobsList) return; // not on jobs page
