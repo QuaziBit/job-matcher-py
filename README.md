@@ -370,6 +370,27 @@ job-matcher-py/
 
 ---
 
+**Branch: v2-advanced**
+This branch includes advanced analysis features — evidence snippets,
+resume suggestions, skill normalization, duplicate gap caps, and resume
+comparison mode. LLM response times are longer than the standard version
+due to the richer structured output required.
+
+**Local model limitations:**
+
+- `llama3.1:8b` and `phi3.5:3.8b` — work reliably
+- `gemma3:27b` — works but slow, increase `OLLAMA_TIMEOUT` to 2000s+
+- `nemotron-3-nano` — not compatible, ignores structured output format
+- Anthropic — works reliably across all job types
+
+This branch always runs at full analysis depth. For a version with
+configurable speed vs depth tradeoffs see
+[v3-advanced](https://github.com/QuaziBit/job-matcher-py/tree/v3-advanced).
+For the stable faster version see
+[main](https://github.com/QuaziBit/job-matcher-py/tree/main).
+
+---
+
 ## Related
 
 - **Go version** → [github.com/alexm/job-matcher-go](https://github.com/alexm/job-matcher-go)
