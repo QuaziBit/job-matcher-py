@@ -35,6 +35,9 @@
     <button class="tab active" data-tab="analysis">Analysis</button>
     <button class="tab" data-tab="application">Application</button>
     <button class="tab" data-tab="description">Job Description</button>
+    {% if comparison %}
+    <button class="tab" data-tab="compare">Compare</button>
+    {% endif %}
   </div>
 
   <!-- ── Analysis Tab ── -->
@@ -133,6 +136,17 @@
           </div>
         </div>
       </details>
+
+      <!-- Text quality warning (shown above Run Analysis if JD is poor quality) -->
+      {% if text_quality and text_quality.level != "ok" %}
+      <div class="text-quality-warning level-{{ text_quality.level }}" style="margin-top:14px;">
+        <span class="text-quality-title">⚠ Job description quality warning</span>
+        <ul class="text-quality-issues">
+          {% for issue in text_quality.issues %}<li>{{ issue }}</li>{% endfor %}
+        </ul>
+        <small class="text-dim">{{ text_quality.char_count }} chars · {{ text_quality.tech_keywords }} tech keywords detected</small>
+      </div>
+      {% endif %}
     </div>
 
     <!-- Past Analyses -->
@@ -169,34 +183,102 @@
           >✕</button>
         </div>
 
-        <!-- Penalty breakdown -->
-        {% set pb = a.penalty_breakdown %}
-        {% if pb and pb.total_penalty %}
-        <div class="penalty-row">
-          {% if pb.blockers %}<span class="penalty-tag penalty-blocker">{{ pb.blockers }} blocker{{ 's' if pb.blockers > 1 else '' }} −{{ pb.blocker_penalty }}</span>{% endif %}
-          {% if pb.majors %}<span class="penalty-tag penalty-major">{{ pb.majors }} major{{ 's' if pb.majors > 1 else '' }} −{{ pb.major_penalty }}</span>{% endif %}
-          {% if pb.minors %}<span class="penalty-tag penalty-minor">{{ pb.minors }} minor{{ 's' if pb.minors > 1 else '' }} −{{ pb.minor_penalty }}</span>{% endif %}
-          {% if pb.count_penalty %}<span class="penalty-tag penalty-count">{{ pb.blockers + pb.majors + pb.minors }} gaps −{{ pb.count_penalty }}</span>{% endif %}
+        <!-- Fallback warning -->
+        {% if a.used_fallback %}
+        <div class="analysis-warning" style="margin-top:8px;">
+          ⚠ This analysis used a fallback due to repeated model output errors.
+          Results may be incomplete. Try re-running the analysis.
+          {% if a.validation_errors %}<small class="text-dim"> ({{ a.validation_errors }})</small>{% endif %}
         </div>
         {% endif %}
 
+        <!-- Score breakdown panel -->
+        {% set pb = a.penalty_breakdown %}
+        {% if pb and pb.total_penalty %}
+        <details class="score-breakdown" style="margin-top:8px;">
+          <summary>Score Breakdown</summary>
+          <div class="score-breakdown-body">
+            <div class="breakdown-row">
+              <span>Base score (LLM)</span>
+              <span>{{ a.score }} / 5</span>
+            </div>
+            <div class="breakdown-penalties">
+              {% for skill in a.missing_skills %}
+                {% if skill is mapping and skill.severity == 'blocker' and skill.get('requirement_type','preferred') != 'bonus' %}
+                <div class="breakdown-penalty-row">
+                  <span class="penalty-tag penalty-blocker">BLOCKER</span>
+                  <span>{{ skill.skill }}</span>
+                  <span>−2</span>
+                </div>
+                {% endif %}
+              {% endfor %}
+              {% for skill in a.missing_skills %}
+                {% if skill is mapping and skill.severity == 'major' and skill.get('requirement_type','preferred') != 'bonus' %}
+                <div class="breakdown-penalty-row">
+                  <span class="penalty-tag penalty-major">MAJOR</span>
+                  <span>{{ skill.skill }}</span>
+                  <span>−1</span>
+                </div>
+                {% endif %}
+              {% endfor %}
+            </div>
+            <div class="breakdown-row breakdown-total-row">
+              <span>Adjusted score</span>
+              <span>{{ a.adjusted_score }} / 5</span>
+            </div>
+            <div class="breakdown-footer">
+              {{ a.llm_provider }}{% if a.llm_model %} · {{ a.llm_model }}{% endif %}
+            </div>
+          </div>
+        </details>
+        {% endif %}
+
+        <!-- Matched skills -->
         {% if a.matched_skills %}
         <div style="margin-top: 10px;">
           <div class="text-xs text-dim" style="margin-bottom: 4px;">Matched skills</div>
           <div class="pill-list">
-            {% for s in a.matched_skills %}<span class="pill pill-green">{{ s }}</span>{% endfor %}
+            {% for s in a.matched_skills %}
+              {% if s is mapping %}
+                <div class="skill-evidence">
+                  <span class="pill pill-green match-{{ s.match_type | default('exact') }}">{{ s.skill }}</span>
+                  {% if s.match_type %}<span class="match-type-badge match-{{ s.match_type }}">{{ s.match_type }}</span>{% endif %}
+                  {% if s.jd_snippet %}
+                  <button class="snippet-toggle" onclick="toggleSnippets(this)">&#9658; evidence</button>
+                  <div class="evidence-snippets" style="display:none;">
+                    <div class="snippet jd-snippet"><span class="snippet-label">JD:</span> &#8220;{{ s.jd_snippet }}&#8221;</div>
+                    {% if s.resume_snippet %}<div class="snippet resume-snippet"><span class="snippet-label">Resume:</span> &#8220;{{ s.resume_snippet }}&#8221;</div>{% endif %}
+                  </div>
+                  {% endif %}
+                </div>
+              {% else %}
+                <span class="pill pill-green">{{ s }}</span>
+              {% endif %}
+            {% endfor %}
           </div>
         </div>
         {% endif %}
 
+        <!-- Missing skills -->
         {% if a.missing_skills %}
         <div style="margin-top: 10px;">
           <div class="text-xs text-dim" style="margin-bottom: 4px;">Missing / gaps</div>
           <div class="pill-list">
             {% for s in a.missing_skills %}
               {% if s is mapping %}
-                <span class="pill {% if s.severity == 'blocker' %}pill-red{% elif s.severity == 'major' %}pill-orange{% else %}pill-dim{% endif %}"
-                      title="{{ s.severity }}">{{ s.skill }}</span>
+                <div class="skill-evidence">
+                  <span class="pill {% if s.severity == 'blocker' %}pill-red{% elif s.severity == 'major' %}pill-orange{% else %}pill-dim{% endif %}"
+                        title="{{ s.severity }}{% if s.requirement_type %} · {{ s.requirement_type }}{% endif %}">
+                    {% if s.requirement_type %}<span class="req-type req-{{ s.requirement_type }}">{{ s.requirement_type | upper }}</span>{% endif %}
+                    {{ s.skill }}
+                  </span>
+                  {% if s.jd_snippet %}
+                  <button class="snippet-toggle" onclick="toggleSnippets(this)">&#9658; evidence</button>
+                  <div class="evidence-snippets" style="display:none;">
+                    <div class="snippet jd-snippet"><span class="snippet-label">JD:</span> &#8220;{{ s.jd_snippet }}&#8221;</div>
+                  </div>
+                  {% endif %}
+                </div>
               {% else %}
                 <span class="pill pill-red">{{ s }}</span>
               {% endif %}
@@ -208,6 +290,26 @@
         {% if a.reasoning %}
         <div class="reasoning">{{ a.reasoning }}</div>
         {% endif %}
+
+        <!-- Resume suggestions -->
+        {% if a.suggestions %}
+        <div class="suggestions-panel">
+          <div class="section-title" style="font-size:11px; margin-bottom:6px;">Resume Suggestions</div>
+          <div class="suggestions-disclaimer">
+            Based on your existing experience only — not skills to fabricate.
+          </div>
+          {% for s in a.suggestions %}
+          <div class="suggestion-item">
+            <div class="suggestion-title">{{ s.title if s is mapping else "Suggestion" }}</div>
+            <div class="suggestion-detail">{{ s.detail if s is mapping else s }}</div>
+            {% if s is mapping and s.job_requirement %}
+            <div class="suggestion-req">Addresses: &#8220;{{ s.job_requirement }}&#8221;</div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
       </div>
       {% endfor %}
     {% else %}
@@ -259,6 +361,15 @@
   <!-- ── Description Tab ── -->
   <div class="tab-content" data-tab-content="description">
     <div class="card">
+      {% if text_quality and text_quality.level != "ok" %}
+      <div class="text-quality-warning level-{{ text_quality.level }}" style="margin-bottom:14px;">
+        <span class="text-quality-title">⚠ Job description quality warning</span>
+        <ul class="text-quality-issues">
+          {% for issue in text_quality.issues %}<li>{{ issue }}</li>{% endfor %}
+        </ul>
+        <small class="text-dim">{{ text_quality.char_count }} chars · {{ text_quality.tech_keywords }} tech keywords detected</small>
+      </div>
+      {% endif %}
       <div class="flex justify-between items-center mb-16">
         <span class="section-title">Raw Scraped Description</span>
         <button class="btn btn-ghost btn-sm" onclick="toggleDesc({{ job.id }})">Toggle</button>
@@ -266,6 +377,42 @@
       <div id="desc-box" class="desc-box hidden"></div>
     </div>
   </div>
+
+  <!-- ── Compare Tab ── -->
+  {% if comparison %}
+  <div class="tab-content" data-tab-content="compare">
+    <div class="card">
+      <div class="compare-panel">
+        <div class="compare-header">
+          <div class="compare-label"></div>
+          <div class="compare-col">{{ comparison.resume_a.resume_label }}</div>
+          <div class="compare-col">{{ comparison.resume_b.resume_label }}</div>
+        </div>
+        <div class="compare-row">
+          <div class="compare-label">Adjusted Score</div>
+          <div class="compare-val score-{{ comparison.resume_a.adjusted_score }}">{{ comparison.resume_a.adjusted_score }} / 5</div>
+          <div class="compare-val score-{{ comparison.resume_b.adjusted_score }}">{{ comparison.resume_b.adjusted_score }} / 5</div>
+        </div>
+        <div class="compare-row">
+          <div class="compare-label">Matched Skills</div>
+          <div class="compare-val">{{ comparison.resume_a.matched_skills | length }}</div>
+          <div class="compare-val">{{ comparison.resume_b.matched_skills | length }}</div>
+        </div>
+        <div class="compare-row">
+          <div class="compare-label">Missing Skills</div>
+          <div class="compare-val">{{ comparison.resume_a.missing_skills | length }}</div>
+          <div class="compare-val">{{ comparison.resume_b.missing_skills | length }}</div>
+        </div>
+        <div class="compare-verdict">
+          <span class="verdict-label">Better fit:</span>
+          <span class="verdict-winner">{{ comparison.better_fit }}</span>
+          <span class="verdict-reason">{{ comparison.better_reason }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
 </div>
 {% endblock %}
 

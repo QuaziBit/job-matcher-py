@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 import aiosqlite
 from database import get_db, init_db
-from scraper import scrape_job
+from scraper import scrape_job, assess_job_text_quality
 from analyzer import analyze_match, _ollama_model
 
 load_dotenv()
@@ -178,30 +178,84 @@ async def job_detail(job_id: int, request: Request, db: aiosqlite.Connection = D
     """, (job_id,)) as cur:
         analyses = [dict(r) for r in await cur.fetchall()]
 
-    # Parse JSON fields back to Python objects
+    # Parse JSON fields — use v2 columns if present, fall back to v1
     for analysis in analyses:
-        for field in ("matched_skills", "missing_skills", "penalty_breakdown"):
-            val = analysis.get(field)
-            if isinstance(val, str):
-                try:
-                    analysis[field] = json.loads(val)
-                except Exception:
-                    analysis[field] = [] if field != "penalty_breakdown" else {}
-        # Ensure adjusted_score falls back to raw score for old records
+        # matched_skills: try v2 (rich objects) first, fall back to v1 (plain strings)
+        v2_matched = analysis.get("matched_skills_v2", "[]") or "[]"
+        try:
+            parsed_v2 = json.loads(v2_matched)
+            if parsed_v2:
+                analysis["matched_skills"] = parsed_v2
+            else:
+                v1 = json.loads(analysis.get("matched_skills", "[]") or "[]")
+                analysis["matched_skills"] = [
+                    {"skill": s, "match_type": "exact",
+                     "jd_snippet": "", "resume_snippet": "", "category": "other"}
+                    for s in v1 if isinstance(s, str)
+                ]
+        except Exception:
+            analysis["matched_skills"] = []
+
+        # missing_skills: try v2 first, fall back to v1
+        v2_missing = analysis.get("missing_skills_v2", "[]") or "[]"
+        try:
+            parsed_v2 = json.loads(v2_missing)
+            if parsed_v2:
+                analysis["missing_skills"] = parsed_v2
+            else:
+                v1 = json.loads(analysis.get("missing_skills", "[]") or "[]")
+                analysis["missing_skills"] = [
+                    {"skill": s["skill"] if isinstance(s, dict) else s,
+                     "severity": s.get("severity", "minor") if isinstance(s, dict) else "minor",
+                     "requirement_type": s.get("requirement_type", "preferred") if isinstance(s, dict) else "preferred",
+                     "jd_snippet": "", "cluster_group": "other"}
+                    for s in v1
+                ]
+        except Exception:
+            analysis["missing_skills"] = []
+
+        # penalty_breakdown
+        pb = analysis.get("penalty_breakdown")
+        if isinstance(pb, str):
+            try:
+                analysis["penalty_breakdown"] = json.loads(pb)
+            except Exception:
+                analysis["penalty_breakdown"] = {}
+
+        # suggestions
+        sugg = analysis.get("suggestions", "[]") or "[]"
+        try:
+            analysis["suggestions"] = json.loads(sugg) if isinstance(sugg, str) else sugg
+        except Exception:
+            analysis["suggestions"] = []
+
+        # adjusted_score fallback
         if not analysis.get("adjusted_score"):
             analysis["adjusted_score"] = analysis["score"]
+
+        # used_fallback as bool
+        analysis["used_fallback"] = bool(analysis.get("used_fallback", 0))
 
     async with db.execute("SELECT id, label FROM resumes ORDER BY created_at DESC") as cur:
         resumes = [dict(r) for r in await cur.fetchall()]
 
+    # Job text quality assessment
+    text_quality = assess_job_text_quality(job.get("raw_description") or "")
+
+    # Resume comparison (shown when 2+ different resumes analyzed)
+    comparison = _build_comparison(analyses)
+
     return templates.TemplateResponse("job_detail.html", {
-        "request": request,
-        "job": job,
-        "application": application,
-        "analyses": analyses,
-        "resumes": resumes,
+        "request":      request,
+        "job":          job,
+        "application":  application,
+        "analyses":     analyses,
+        "resumes":      resumes,
         "ollama_model": _ollama_model(),
+        "text_quality": text_quality,
+        "comparison":   comparison,
     })
+
 
 
 @app.get("/resumes", response_class=HTMLResponse)
@@ -423,6 +477,55 @@ async def add_job_manual(
     return JSONResponse({"job_id": job_id, "title": title, "company": company})
 
 
+# ── Resume comparison helpers ─────────────────────────────────────────────────
+
+def _has_blocker(missing_skills: list) -> bool:
+    return any(
+        (s.get("severity") if isinstance(s, dict) else "") == "blocker"
+        for s in missing_skills
+    )
+
+
+def _determine_better_fit(a: dict, b: dict) -> tuple:
+    a_has_blocker = _has_blocker(a.get("missing_skills", []))
+    b_has_blocker = _has_blocker(b.get("missing_skills", []))
+
+    if a_has_blocker and not b_has_blocker:
+        return b["resume_label"], f"No hard blockers vs {a['resume_label']} which has blockers"
+    if b_has_blocker and not a_has_blocker:
+        return a["resume_label"], f"No hard blockers vs {b['resume_label']} which has blockers"
+
+    a_score = a.get("adjusted_score", 0)
+    b_score = b.get("adjusted_score", 0)
+    if a_score > b_score:
+        return a["resume_label"], f"Higher adjusted score ({a_score} vs {b_score})"
+    if b_score > a_score:
+        return b["resume_label"], f"Higher adjusted score ({b_score} vs {a_score})"
+    return "Tie", "Both resumes score equally for this role"
+
+
+def _build_comparison(analyses: list) -> dict | None:
+    seen: dict = {}
+    for a in analyses:
+        rid = a.get("resume_id")
+        if rid not in seen:
+            seen[rid] = a
+        if len(seen) == 2:
+            break
+    if len(seen) < 2:
+        return None
+
+    ids = list(seen.keys())
+    ra, rb = seen[ids[0]], seen[ids[1]]
+    better, reason = _determine_better_fit(ra, rb)
+    return {
+        "resume_a":     ra,
+        "resume_b":     rb,
+        "better_fit":   better,
+        "better_reason": reason,
+    }
+
+
 @app.post("/api/jobs/{job_id}/analyze")
 async def analyze_job(
     job_id: int,
@@ -445,22 +548,41 @@ async def analyze_job(
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
 
+    # v1 backward-compat: plain skill name lists
+    matched_v1 = json.dumps([
+        s["skill"] if isinstance(s, dict) else s
+        for s in result.get("matched_skills", [])
+    ])
+    missing_v1 = json.dumps([
+        {"skill": s["skill"], "severity": s.get("severity", "minor")}
+        if isinstance(s, dict) else {"skill": s, "severity": "minor"}
+        for s in result.get("missing_skills", [])
+    ])
+
     await db.execute(
         """INSERT INTO analyses
            (job_id, resume_id, score, adjusted_score, penalty_breakdown,
-            matched_skills, missing_skills, reasoning, llm_provider, llm_model)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            matched_skills, missing_skills, reasoning, llm_provider, llm_model,
+            matched_skills_v2, missing_skills_v2, suggestions,
+            validation_errors, retry_count, used_fallback)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job_id,
             resume_id,
             result["score"],
             result.get("adjusted_score", result["score"]),
             json.dumps(result.get("penalty_breakdown", {})),
-            json.dumps(result["matched_skills"]),
-            json.dumps(result["missing_skills"]),
+            matched_v1,
+            missing_v1,
             result["reasoning"],
             result["llm_provider"],
             result.get("llm_model", ""),
+            json.dumps(result.get("matched_skills", [])),
+            json.dumps(result.get("missing_skills", [])),
+            json.dumps(result.get("suggestions", [])),
+            result.get("validation_errors", ""),
+            result.get("retry_count", 0),
+            1 if result.get("used_fallback") else 0,
         ),
     )
     await db.commit()

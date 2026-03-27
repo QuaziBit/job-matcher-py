@@ -102,6 +102,12 @@ async def init_db():
             "ALTER TABLE analyses ADD COLUMN llm_model TEXT DEFAULT ''",
             "ALTER TABLE analyses ADD COLUMN adjusted_score INTEGER DEFAULT 0",
             "ALTER TABLE analyses ADD COLUMN penalty_breakdown TEXT DEFAULT '{}'",
+            "ALTER TABLE analyses ADD COLUMN matched_skills_v2 TEXT DEFAULT '[]'",
+            "ALTER TABLE analyses ADD COLUMN missing_skills_v2 TEXT DEFAULT '[]'",
+            "ALTER TABLE analyses ADD COLUMN suggestions TEXT DEFAULT '[]'",
+            "ALTER TABLE analyses ADD COLUMN validation_errors TEXT DEFAULT ''",
+            "ALTER TABLE analyses ADD COLUMN retry_count INTEGER DEFAULT 0",
+            "ALTER TABLE analyses ADD COLUMN used_fallback INTEGER DEFAULT 0",
         ]:
             try:
                 await db.execute(migration)

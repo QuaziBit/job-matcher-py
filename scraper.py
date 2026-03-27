@@ -126,3 +126,76 @@ async def scrape_job(url: str) -> dict:
         "location": meta["location"],
         "raw_description": description,
     }
+
+# ── Job text quality assessment ───────────────────────────────────────────────
+
+TECH_KEYWORDS = [
+    "python", "javascript", "typescript", "go", "java", "react", "angular",
+    "vue", "node", "django", "flask", "fastapi", "spring", "docker",
+    "kubernetes", "aws", "azure", "gcp", "sql", "postgresql", "mongodb",
+    "redis", "terraform", "ci/cd", "jenkins", "git", "linux", "api",
+    "rest", "graphql", "microservices", "llm", "machine learning",
+]
+
+BUZZWORDS = [
+    "synergy", "leverage", "paradigm", "holistic", "proactive",
+    "dynamic", "innovative", "passionate", "rockstar", "ninja",
+    "guru", "wizard", "thought leader", "disruptive", "agile mindset",
+]
+
+
+def assess_job_text_quality(text: str) -> dict:
+    """
+    Run deterministic quality checks on a job description.
+    Returns dict with level ("ok"|"warn"|"poor"), issues, char_count,
+    tech_keywords, and buzzword_count.
+    """
+    issues = []
+    char_count = len(text)
+    words = text.lower().split()
+
+    # Too short
+    if char_count < 300:
+        issues.append(f"Description too short ({char_count} chars) — analysis may be unreliable")
+
+    # Non-ASCII noise
+    if char_count > 0:
+        non_ascii = sum(1 for c in text if ord(c) > 127)
+        if non_ascii / char_count > 0.15:
+            issues.append("High non-ASCII content — possible scraping noise")
+
+    # Bullet heavy
+    bullet_count = text.count("•") + text.count("·") + text.count("-\n")
+    if bullet_count > 60:
+        issues.append("Bullet-heavy posting — limited context for inference")
+
+    # Buzzword density
+    buzzword_count = sum(1 for w in words if w in BUZZWORDS)
+    if words and buzzword_count / len(words) > 0.15:
+        issues.append("High buzzword density — requirements may be vague")
+
+    # Mixed seniority signals
+    text_lower = text.lower()
+    junior_signals = "junior" in text_lower or "entry level" in text_lower or "entry-level" in text_lower
+    senior_signals = "senior" in text_lower or "5+ years" in text_lower or "7+ years" in text_lower
+    if junior_signals and senior_signals:
+        issues.append("Mixed seniority signals — job level is unclear")
+
+    # Tech keyword count
+    tech_keywords = sum(1 for kw in TECH_KEYWORDS if kw in text_lower)
+    if char_count > 500 and tech_keywords == 0:
+        issues.append("No recognized tech keywords — job requirements may be too vague")
+
+    level = "ok"
+    if len(issues) >= 2 or char_count < 150:
+        level = "poor"
+    elif len(issues) >= 1:
+        level = "warn"
+
+    return {
+        "level":          level,
+        "issues":         issues,
+        "char_count":     char_count,
+        "tech_keywords":  tech_keywords,
+        "buzzword_count": buzzword_count,
+    }

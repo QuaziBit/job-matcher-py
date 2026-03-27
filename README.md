@@ -347,8 +347,10 @@ job-matcher-py/
 ├── launcher.py          Browser-based launcher (health checks, Start/Stop/Restart)
 ├── database.py          SQLite schema init and async connection helper
 ├── scraper.py           URL fetching, HTML parsing, metadata extraction
+├── ollama_utils.py      Ollama API client with error handling
 ├── analyzer.py          LLM prompt construction, API calls, penalty pipeline
 ├── tests.py             Full unit + integration test suite
+├── screenshots/            Example screenshots for the README
 ├── templates/
 │   ├── base.html        Sidebar layout shell
 │   ├── index.html       Jobs list page
@@ -360,7 +362,10 @@ job-matcher-py/
 ├── .env                 Your secrets — never commit this file
 ├── .env.example         Template for .env
 ├── requirements.txt     Python dependencies with pinned versions
-└── job_matcher.db       SQLite database — auto-created on first run
+├── job_matcher.db       SQLite database — auto-created on first run
+├── LICENSE
+├── README.md
+└── .gitignore
 ```
 
 ---

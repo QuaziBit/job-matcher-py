@@ -168,32 +168,46 @@ MOCK_HTML_NO_CONTENT = """
 
 MOCK_LLM_RESPONSE_GOOD = json.dumps({
     "score": 5,
-    "matched_skills": ["Python", "Docker", "AWS", "CI/CD", "Splunk", "Security+", "Linux"],
+    "matched_skills": [
+        {"skill": "Python",    "match_type": "exact", "jd_snippet": "Python required",    "resume_snippet": "Python developer"},
+        {"skill": "Docker",    "match_type": "exact", "jd_snippet": "Docker containers",  "resume_snippet": "Docker experience"},
+        {"skill": "AWS",       "match_type": "exact", "jd_snippet": "AWS cloud",          "resume_snippet": "AWS Secrets Manager"},
+        {"skill": "CI/CD",     "match_type": "exact", "jd_snippet": "CI/CD pipelines",    "resume_snippet": "Jenkins CI/CD"},
+        {"skill": "Splunk",    "match_type": "exact", "jd_snippet": "Splunk SIEM",        "resume_snippet": "Splunk dashboards"},
+        {"skill": "Security+", "match_type": "exact", "jd_snippet": "Security+ preferred","resume_snippet": "CompTIA Security+"},
+        {"skill": "Linux",     "match_type": "exact", "jd_snippet": "Linux systems",      "resume_snippet": "Linux administration"},
+    ],
     "missing_skills": [
-        {"skill": "Active Secret Clearance", "severity": "blocker"},
+        {"skill": "Active Secret Clearance", "severity": "blocker",
+         "requirement_type": "hard", "jd_snippet": "Active Secret clearance required"},
     ],
     "reasoning": (
         "Excellent match. The candidate's DevSecOps background, Security+ cert, "
         "AWS Secrets Manager experience, and prior federal government client work "
         "align almost perfectly with this role. The only gap is an active clearance."
-    )
+    ),
+    "suggestions": [
+        {"title": "Clarify clearance status", "detail": "If pursuing clearance, note it.",
+         "job_requirement": "Active Secret clearance required"}
+    ]
 })
 
 MOCK_LLM_RESPONSE_POOR = json.dumps({
     "score": 1,
     "matched_skills": [],
     "missing_skills": [
-        {"skill": "Google Ads", "severity": "blocker"},
-        {"skill": "Facebook Ads", "severity": "blocker"},
-        {"skill": "HubSpot", "severity": "major"},
-        {"skill": "SEO", "severity": "major"},
-        {"skill": "Content Strategy", "severity": "minor"},
+        {"skill": "Google Ads",       "severity": "blocker", "requirement_type": "hard",      "jd_snippet": "Google Ads required"},
+        {"skill": "Facebook Ads",     "severity": "blocker", "requirement_type": "hard",      "jd_snippet": "Facebook Ads required"},
+        {"skill": "HubSpot",          "severity": "major",   "requirement_type": "preferred", "jd_snippet": "HubSpot preferred"},
+        {"skill": "SEO",              "severity": "major",   "requirement_type": "preferred", "jd_snippet": "SEO experience"},
+        {"skill": "Content Strategy", "severity": "minor",   "requirement_type": "bonus",     "jd_snippet": "content strategy a plus"},
     ],
     "reasoning": (
         "Poor match. The candidate's background is entirely in software engineering "
         "and DevSecOps. This role requires digital marketing expertise with no "
         "technical overlap."
-    )
+    ),
+    "suggestions": []
 })
 
 MOCK_LLM_RESPONSE_WITH_FENCES = f"```json\n{MOCK_LLM_RESPONSE_GOOD}\n```"
@@ -230,7 +244,8 @@ class TestParseResponse(unittest.TestCase):
         from analyzer import _parse_response
         result = _parse_response(MOCK_LLM_RESPONSE_GOOD)
         self.assertEqual(result["score"], 5)
-        self.assertIn("Python", result["matched_skills"])
+        skill_names = [s["skill"] if isinstance(s, dict) else s for s in result["matched_skills"]]
+        self.assertIn("Python", skill_names)
         # missing_skills is now structured [{skill, severity}]
         skill_names = [s["skill"] for s in result["missing_skills"]]
         self.assertIn("Active Secret Clearance", skill_names)
@@ -322,11 +337,14 @@ class TestPenaltyPipeline(unittest.TestCase):
 
     def test_blocker_reduces_score(self):
         from analyzer import _compute_adjusted_score
-        missing = [{"skill": "TS/SCI Clearance", "severity": "blocker"}]
+        # TS/SCI Clearance is in "security" cluster — cap is 2
+        missing = [{"skill": "TS/SCI Clearance", "severity": "blocker",
+                    "requirement_type": "hard", "cluster_group": "security"}]
         adjusted, breakdown = _compute_adjusted_score(4, missing)
         self.assertLess(adjusted, 4)
         self.assertEqual(breakdown["blockers"], 1)
-        self.assertEqual(breakdown["blocker_penalty"], 2)
+        # In cluster pipeline, security cluster penalty goes into clusters dict
+        self.assertEqual(breakdown["clusters"].get("security", 0), 2)
 
     def test_no_penalty_when_no_gaps(self):
         from analyzer import _compute_adjusted_score
@@ -337,45 +355,95 @@ class TestPenaltyPipeline(unittest.TestCase):
     def test_adjusted_score_never_below_1(self):
         from analyzer import _compute_adjusted_score
         missing = [
-            {"skill": "Clearance", "severity": "blocker"},
-            {"skill": "10 years exp", "severity": "blocker"},
-            {"skill": "Kubernetes", "severity": "major"},
+            {"skill": "Clearance",    "severity": "blocker",
+             "requirement_type": "hard",      "cluster_group": "security"},
+            {"skill": "10 years exp", "severity": "blocker",
+             "requirement_type": "hard",      "cluster_group": "other"},
+            {"skill": "Kubernetes",   "severity": "major",
+             "requirement_type": "preferred", "cluster_group": "devops"},
         ]
         adjusted, _ = _compute_adjusted_score(2, missing)
         self.assertGreaterEqual(adjusted, 1)
 
     def test_minor_gaps_small_penalty(self):
         from analyzer import _compute_adjusted_score
-        missing = [{"skill": "Nice-to-have", "severity": "minor"}]
+        # minor severity returns 0 from penalty_for_skill — no penalty
+        missing = [{"skill": "Nice-to-have", "severity": "minor",
+                    "requirement_type": "preferred", "cluster_group": "other"}]
         adjusted, breakdown = _compute_adjusted_score(4, missing)
-        self.assertEqual(breakdown["minor_penalty"], 0)  # 1 minor = 0.5 → int = 0
+        self.assertEqual(breakdown["total_penalty"], 0)
         self.assertEqual(adjusted, 4)
 
     def test_two_minors_give_penalty(self):
         from analyzer import _compute_adjusted_score
+        # Two minors: penalty_for_skill returns 0 each — cluster cap irrelevant
+        # New pipeline does not penalize minors individually — count threshold removed
+        # Adjusted score stays the same
         missing = [
-            {"skill": "A", "severity": "minor"},
-            {"skill": "B", "severity": "minor"},
+            {"skill": "A", "severity": "minor",
+             "requirement_type": "preferred", "cluster_group": "other"},
+            {"skill": "B", "severity": "minor",
+             "requirement_type": "preferred", "cluster_group": "frontend"},
         ]
         adjusted, breakdown = _compute_adjusted_score(5, missing)
-        self.assertEqual(breakdown["minor_penalty"], 1)
-        self.assertEqual(adjusted, 4)
+        self.assertEqual(breakdown["total_penalty"], 0)
+        self.assertEqual(adjusted, 5)
 
     def test_count_penalty_above_6_gaps(self):
         from analyzer import _compute_adjusted_score
-        missing = [{"skill": f"skill{i}", "severity": "minor"} for i in range(7)]
+        # Count penalty was removed in cluster pipeline — each cluster is capped instead
+        # 7 minor skills across different clusters: each cluster capped at 0 (minors = 0 penalty)
+        missing = [{"skill": f"skill{i}", "severity": "minor",
+                    "requirement_type": "preferred", "cluster_group": f"cat{i}"}
+                   for i in range(7)]
         _, breakdown = _compute_adjusted_score(4, missing)
-        self.assertEqual(breakdown["count_penalty"], 1)
+        # No count penalty in new pipeline
+        self.assertEqual(breakdown["count_penalty"], 0)
+
+    def test_bonus_requirement_zero_penalty(self):
+        from analyzer import penalty_for_skill
+        skill = {"skill": "Kubernetes", "severity": "major",
+                 "requirement_type": "bonus"}
+        self.assertEqual(penalty_for_skill(skill), 0)
+
+    def test_hard_blocker_penalty(self):
+        from analyzer import penalty_for_skill
+        skill = {"skill": "Secret Clearance", "severity": "blocker",
+                 "requirement_type": "hard"}
+        self.assertEqual(penalty_for_skill(skill), 2)
+
+    def test_preferred_major_penalty(self):
+        from analyzer import penalty_for_skill
+        skill = {"skill": "AWS", "severity": "major",
+                 "requirement_type": "preferred"}
+        self.assertEqual(penalty_for_skill(skill), 1)
+
+    def test_cloud_cluster_capped(self):
+        from analyzer import _compute_adjusted_score
+        # 3 major cloud skills should be capped at -1 total, not -3
+        missing = [
+            {"skill": "AWS",    "severity": "major",
+             "requirement_type": "preferred", "cluster_group": "cloud"},
+            {"skill": "Lambda", "severity": "major",
+             "requirement_type": "preferred", "cluster_group": "cloud"},
+            {"skill": "S3",     "severity": "major",
+             "requirement_type": "preferred", "cluster_group": "cloud"},
+        ]
+        adjusted, breakdown = _compute_adjusted_score(4, missing)
+        self.assertEqual(breakdown["clusters"].get("cloud", 0), 1)
+        self.assertEqual(adjusted, 3)
 
     def test_keyword_detector_upgrades_clearance(self):
         from analyzer import _keyword_boost
-        skills = [{"skill": "Active TS/SCI Clearance", "severity": "minor"}]
+        skills = [{"skill": "Active TS/SCI Clearance", "severity": "minor",
+                   "requirement_type": "preferred", "cluster_group": "security"}]
         result = _keyword_boost(skills, "Must have clearance to apply")
         self.assertEqual(result[0]["severity"], "blocker")
 
     def test_keyword_detector_upgrades_years(self):
         from analyzer import _keyword_boost
-        skills = [{"skill": "7 years experience", "severity": "major"}]
+        skills = [{"skill": "7 years experience", "severity": "major",
+                   "requirement_type": "preferred", "cluster_group": "other"}]
         result = _keyword_boost(skills, "Requires 7+ years of experience")
         self.assertEqual(result[0]["severity"], "blocker")
 
@@ -405,7 +473,8 @@ class TestAnalyzeWithAnthropic(unittest.TestCase):
         self.assertEqual(result["score"], 5)
         self.assertEqual(result["llm_provider"], "anthropic")
         self.assertEqual(result["llm_model"], ANTHROPIC_MODEL)
-        self.assertIn("Python", result["matched_skills"])
+        skill_names = [s["skill"] if isinstance(s, dict) else s for s in result["matched_skills"]]
+        self.assertIn("Python", skill_names)
 
     @patch("analyzer.anthropic.Anthropic")
     def test_calls_correct_model(self, mock_cls):
@@ -457,19 +526,35 @@ class TestAnalyzeWithOllama(unittest.TestCase):
 
 
 class TestAnalyzeMatchDispatch(unittest.TestCase):
-    @patch("analyzer.analyze_with_anthropic", new_callable=AsyncMock)
-    @patch("analyzer.analyze_with_ollama", new_callable=AsyncMock)
+    @patch("analyzer._call_anthropic_once", new_callable=AsyncMock)
+    @patch("analyzer._call_ollama_once", new_callable=AsyncMock)
     def test_routes_to_anthropic_by_default(self, mock_ollama, mock_anthropic):
-        mock_anthropic.return_value = {"score": 4, "llm_provider": "anthropic"}
+        mock_anthropic.return_value = {
+            "score": 4, "adjusted_score": 4, "llm_provider": "anthropic",
+            "llm_model": "claude-opus-4-5",
+            "matched_skills": [{"skill": "Python", "match_type": "exact",
+                                 "jd_snippet": "Python required",
+                                 "resume_snippet": "Python dev", "category": "backend"}],
+            "missing_skills": [], "reasoning": "Good match",
+            "penalty_breakdown": {}, "suggestions": [],
+        }
         from analyzer import analyze_match
         run(analyze_match("resume", "job"))
         mock_anthropic.assert_called_once()
         mock_ollama.assert_not_called()
 
-    @patch("analyzer.analyze_with_anthropic", new_callable=AsyncMock)
-    @patch("analyzer.analyze_with_ollama", new_callable=AsyncMock)
+    @patch("analyzer._call_anthropic_once", new_callable=AsyncMock)
+    @patch("analyzer._call_ollama_once", new_callable=AsyncMock)
     def test_routes_to_ollama_when_specified(self, mock_ollama, mock_anthropic):
-        mock_ollama.return_value = {"score": 3, "llm_provider": "ollama"}
+        mock_ollama.return_value = {
+            "score": 3, "adjusted_score": 3, "llm_provider": "ollama",
+            "llm_model": "llama3.1",
+            "matched_skills": [{"skill": "Docker", "match_type": "exact",
+                                 "jd_snippet": "Docker required",
+                                 "resume_snippet": "Used Docker", "category": "devops"}],
+            "missing_skills": [], "reasoning": "Partial match",
+            "penalty_breakdown": {}, "suggestions": [],
+        }
         from analyzer import analyze_match
         run(analyze_match("resume", "job", provider="ollama"))
         mock_ollama.assert_called_once()

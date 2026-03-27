@@ -360,6 +360,18 @@ async function addResume(e) {
 }
 
 // =============================================== //
+// == Snippet toggle ============================= //
+// =============================================== //
+function toggleSnippets(btn) {
+  log('toggleSnippets', 'clicked');
+  const container = btn.nextElementSibling;
+  if (!container) { logErr('toggleSnippets', 'no sibling found'); return; }
+  const isHidden = container.style.display === 'none' || !container.style.display;
+  container.style.display = isHidden ? 'block' : 'none';
+  btn.innerHTML = isHidden ? '&#9660; evidence' : '&#9658; evidence';
+}
+
+// =============================================== //
 // == Toggle description ========================= //
 // =============================================== //
 async function toggleDesc(jobId) {
