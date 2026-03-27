@@ -17,6 +17,45 @@ logger = logging.getLogger("analyzer")
 ANTHROPIC_MODEL = "claude-opus-4-5"
 MAX_RETRIES = 3
 
+# ── Analysis Mode configuration ───────────────────────────────────────────────
+
+MODE_CONFIG = {
+    "fast": {
+        "snippet_len":  40,
+        "max_matched":   5,
+        "max_missing":   4,
+        "suggestions": False,
+        "num_predict": 800,
+    },
+    "standard": {
+        "snippet_len":  70,
+        "max_matched":   8,
+        "max_missing":   6,
+        "suggestions": True,
+        "num_predict": 1800,
+    },
+    "detailed": {
+        "snippet_len":  100,
+        "max_matched":  15,
+        "max_missing":  10,
+        "suggestions": True,
+        "num_predict": 4096,
+    },
+}
+
+# Estimated response time in seconds per mode (used by frontend progress bar)
+MODE_ESTIMATES = {
+    "fast":     30,
+    "standard": 90,
+    "detailed": 240,
+}
+
+
+def get_mode_config() -> dict:
+    """Read ANALYSIS_MODE from env and return the corresponding config dict."""
+    mode = os.getenv("ANALYSIS_MODE", "standard").lower().strip()
+    return MODE_CONFIG.get(mode, MODE_CONFIG["standard"])
+
 # Hard-blocker keyword patterns for the keyword-based detector
 BLOCKER_KEYWORDS = [
     "clearance", "ts/sci", "top secret", "secret", "polygraph",
@@ -32,29 +71,22 @@ def _ollama_model() -> str:
     return os.getenv("OLLAMA_MODEL", "llama3.1")
 
 
-SYSTEM_PROMPT = """You are an expert technical recruiter and career coach specializing in software engineering,
+# ── System prompts per mode ───────────────────────────────────────────────────
+
+_SYSTEM_PROMPT_BASE = """You are an expert technical recruiter and career coach specializing in software engineering,
 DevSecOps, and cloud infrastructure roles. You evaluate how well a candidate's resume matches a job description.
 
-You MUST respond with ONLY valid JSON — no prose, no markdown, no code fences. Exactly this shape:
-{
-  "score": <integer 1-5>,
-  "matched_skills": [
-    {"skill": "skill name", "match_type": "exact|partial|inferred",
-     "jd_snippet": "verbatim phrase from JD (max 100 chars)",
-     "resume_snippet": "verbatim phrase from resume (max 100 chars)"}
-  ],
-  "missing_skills": [
-    {"skill": "skill name", "severity": "blocker|major|minor",
-     "requirement_type": "hard|preferred|bonus",
-     "jd_snippet": "verbatim phrase from JD (max 100 chars)"}
-  ],
-  "reasoning": "<2-4 sentence honest assessment>",
-  "suggestions": [
-    {"title": "short label", "detail": "specific actionable text",
-     "job_requirement": "verbatim JD phrase this addresses"}
-  ]
-}
+You MUST respond with ONLY valid JSON — no prose, no markdown, no code fences."""
 
+_SCORING_RUBRIC = """
+Scoring rubric:
+  1 = Poor match — major gaps, different domain entirely
+  2 = Weak match — some overlap but significant missing requirements
+  3 = Moderate match — meets roughly half the requirements
+  4 = Strong match — meets most requirements with minor gaps
+  5 = Excellent match — highly aligned, apply immediately"""
+
+_SEVERITY_DEFS = """
 Severity definitions for missing_skills:
   blocker = eliminates candidacy entirely (e.g. required clearance, mandatory cert, minimum years not met)
   major   = significant gap that will hurt chances substantially
@@ -69,28 +101,77 @@ requirement_type definitions for missing_skills:
 match_type definitions for matched_skills:
   exact    = skill name appears verbatim in both JD and resume
   partial  = related term found (e.g. "REST" matches "REST APIs")
-  inferred = implied by context, no direct phrase found
+  inferred = implied by context, no direct phrase found"""
 
-Snippet rules — you MUST follow these exactly:
-  - Snippets must be verbatim phrases copied from the provided text, max 100 characters
-  - Do NOT fabricate or paraphrase snippets
-  - If you cannot find a direct phrase for a matched skill, set match_type to "inferred"
-    and omit resume_snippet
+
+def _build_system_prompt(cfg: dict | None = None) -> str:
+    """Build mode-appropriate system prompt."""
+    if cfg is None:
+        cfg = get_mode_config()
+
+    mode      = os.getenv("ANALYSIS_MODE", "standard").lower().strip()
+    slen      = cfg["snippet_len"]
+    mmatched  = cfg["max_matched"]
+    mmissing  = cfg["max_missing"]
+    do_sugg   = cfg["suggestions"]
+
+    if mode == "fast":
+        return f"""{_SYSTEM_PROMPT_BASE}
+
+Return at most {mmatched} matched skills and at most {mmissing} missing skills — only the most significant ones.
+Snippets must be verbatim phrases, max {slen} characters. Do NOT fabricate snippets.
+
+Exactly this JSON shape:
+{{
+  "score": <integer 1-5>,
+  "matched_skills": [
+    {{"skill": "name", "match_type": "exact|partial|inferred", "jd_snippet": "<{slen} chars>"}}
+  ],
+  "missing_skills": [
+    {{"skill": "name", "severity": "blocker|major|minor",
+      "requirement_type": "hard|preferred|bonus", "jd_snippet": "<{slen} chars>"}}
+  ],
+  "reasoning": "<1-2 sentence honest assessment>"
+}}
+{_SEVERITY_DEFS}
+{_SCORING_RUBRIC}"""
+
+    # standard or detailed
+    sugg_block = ""
+    if do_sugg:
+        sugg_block = f"""
+  "suggestions": [
+    {{"title": "short label", "detail": "specific actionable text",
+      "job_requirement": "verbatim JD phrase this addresses"}}
+  ]
 
 Suggestion rules — you MUST follow these exactly:
   - Generate exactly 3 resume improvement suggestions
   - ONLY suggest clarifying, repositioning, or expanding EXISTING resume content
-  - NEVER suggest adding skills, certifications, or experience the candidate does not already have
-  - Each suggestion must cite the specific job requirement it addresses
-  - If the resume is already strong for a requirement, skip it (fewer than 3 is acceptable)
+  - NEVER suggest adding skills the candidate does not already have
+  - Each suggestion must cite the specific job requirement it addresses"""
 
-Scoring rubric:
-  1 = Poor match — major gaps, different domain entirely
-  2 = Weak match — some overlap but significant missing requirements
-  3 = Moderate match — meets roughly half the requirements
-  4 = Strong match — meets most requirements with minor gaps
-  5 = Excellent match — highly aligned, apply immediately
-"""
+    return f"""{_SYSTEM_PROMPT_BASE}
+
+Return at most {mmatched} matched skills and at most {mmissing} missing skills.
+Snippets must be verbatim phrases copied from the provided text, max {slen} characters.
+Do NOT fabricate or paraphrase snippets. If no direct phrase exists, set match_type to "inferred" and omit resume_snippet.
+
+Exactly this JSON shape:
+{{
+  "score": <integer 1-5>,
+  "matched_skills": [
+    {{"skill": "name", "match_type": "exact|partial|inferred",
+      "jd_snippet": "<{slen} chars>", "resume_snippet": "<{slen} chars>"}}
+  ],
+  "missing_skills": [
+    {{"skill": "name", "severity": "blocker|major|minor",
+      "requirement_type": "hard|preferred|bonus", "jd_snippet": "<{slen} chars>"}}
+  ],
+  "reasoning": "<2-4 sentence honest assessment>"{sugg_block}
+}}
+{_SEVERITY_DEFS}
+{_SCORING_RUBRIC}"""
 
 
 def _build_user_prompt(resume: str, job_description: str) -> str:
@@ -498,7 +579,7 @@ def _repair_truncated_json(raw: str) -> str:
     return repaired
 
 
-def _parse_response(raw: str, job_description: str = "") -> dict:
+def _parse_response(raw: str, job_description: str = "", cfg: dict | None = None) -> dict:
     """Extract and validate JSON from LLM response, apply full penalty pipeline."""
     raw = re.sub(r"```(?:json)?", "", raw).strip()
 
@@ -530,9 +611,19 @@ def _parse_response(raw: str, job_description: str = "") -> dict:
     if not 1 <= score <= 5:
         raise ValueError(f"Score out of range: {score}")
 
-    matched  = _parse_matched_skills(data.get("matched_skills", []))
-    missing  = _parse_missing_skills(data.get("missing_skills", []))
-    suggestions = _parse_suggestions(data.get("suggestions", []))
+    if cfg is None:
+        cfg = get_mode_config()
+
+    # Parse and apply mode-based caps
+    matched = _parse_matched_skills(data.get("matched_skills", []))
+    missing = _parse_missing_skills(data.get("missing_skills", []))
+    matched = matched[:cfg["max_matched"]]
+    missing = missing[:cfg["max_missing"]]
+
+    # Suggestions — skip entirely in fast mode
+    suggestions = []
+    if cfg["suggestions"]:
+        suggestions = _parse_suggestions(data.get("suggestions", []))
 
     # Keyword detector pass — upgrade severities based on JD content
     if job_description:
@@ -557,43 +648,47 @@ def _parse_response(raw: str, job_description: str = "") -> dict:
 # ── LLM call helpers ──────────────────────────────────────────────────────────
 
 async def _call_anthropic_once(resume: str, job_description: str) -> dict:
+    cfg = get_mode_config()
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise ValueError(
             "analysis failed: Anthropic API key is not set — add it in the launcher or config.json"
         )
+    system_prompt = _build_system_prompt(cfg)
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model=ANTHROPIC_MODEL,
-        max_tokens=4096, # old max_tokens: 1024
-        system=SYSTEM_PROMPT,
+        max_tokens=cfg["num_predict"],
+        system=system_prompt,
         messages=[{"role": "user", "content": _build_user_prompt(resume, job_description)}],
     )
     raw = message.content[0].text
-    result = _parse_response(raw, job_description)
+    result = _parse_response(raw, job_description, cfg)
     result["llm_provider"] = "anthropic"
     result["llm_model"]    = ANTHROPIC_MODEL
+    result["analysis_mode"] = os.getenv("ANALYSIS_MODE", "standard")
     return result
 
 
 async def _call_ollama_once(resume: str, job_description: str) -> dict:
+    cfg   = get_mode_config()
     model = _ollama_model()
-    full_prompt = SYSTEM_PROMPT + _build_user_prompt(resume, job_description)
-    num_predict = safe_num_predict(full_prompt, model_name=model, desired_output=4096)
+    system_prompt = _build_system_prompt(cfg)
+    full_prompt = system_prompt + _build_user_prompt(resume, job_description)
+    num_predict = safe_num_predict(full_prompt, model_name=model,
+                                   desired_output=cfg["num_predict"])
 
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user",   "content": _build_user_prompt(resume, job_description)},
         ],
         "stream": False,
         "options": {"temperature": 0.2, "num_predict": num_predict},
     }
 
-
     timeout = int(os.getenv("OLLAMA_TIMEOUT", "600"))
-
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
@@ -608,9 +703,10 @@ async def _call_ollama_once(resume: str, job_description: str) -> dict:
             raise ValueError(f"Ollama error: {e.response.status_code} — {e.response.text}")
 
     raw = resp.json()["message"]["content"]
-    result = _parse_response(raw, job_description)
-    result["llm_provider"] = "ollama"
-    result["llm_model"]    = model
+    result = _parse_response(raw, job_description, cfg)
+    result["llm_provider"]  = "ollama"
+    result["llm_model"]     = model
+    result["analysis_mode"] = os.getenv("ANALYSIS_MODE", "standard")
     return result
 
 

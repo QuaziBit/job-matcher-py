@@ -108,6 +108,8 @@ async def init_db():
             "ALTER TABLE analyses ADD COLUMN validation_errors TEXT DEFAULT ''",
             "ALTER TABLE analyses ADD COLUMN retry_count INTEGER DEFAULT 0",
             "ALTER TABLE analyses ADD COLUMN used_fallback INTEGER DEFAULT 0",
+            "ALTER TABLE analyses ADD COLUMN duration_seconds INTEGER DEFAULT 0",
+            "ALTER TABLE analyses ADD COLUMN analysis_mode TEXT DEFAULT 'standard'",
         ]:
             try:
                 await db.execute(migration)

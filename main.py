@@ -144,6 +144,16 @@ app = FastAPI(title="Job Matcher", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+def _format_duration(seconds: int) -> str:
+    """Format seconds as '1:23' or '45s'. Returns '' for zero/None."""
+    if not seconds:
+        return ""
+    m = seconds // 60
+    s = seconds % 60
+    return f"{m}:{s:02d}" if m > 0 else f"{s}s"
+
+templates.env.filters["format_duration"] = _format_duration
+
 
 # ─── Pages ────────────────────────────────────────────────────────────────────
 
@@ -246,14 +256,15 @@ async def job_detail(job_id: int, request: Request, db: aiosqlite.Connection = D
     comparison = _build_comparison(analyses)
 
     return templates.TemplateResponse("job_detail.html", {
-        "request":      request,
-        "job":          job,
-        "application":  application,
-        "analyses":     analyses,
-        "resumes":      resumes,
-        "ollama_model": _ollama_model(),
-        "text_quality": text_quality,
-        "comparison":   comparison,
+        "request":       request,
+        "job":           job,
+        "application":   application,
+        "analyses":      analyses,
+        "resumes":       resumes,
+        "ollama_model":  _ollama_model(),
+        "text_quality":  text_quality,
+        "comparison":    comparison,
+        "analysis_mode": os.getenv("ANALYSIS_MODE", "standard"),
     })
 
 
@@ -544,7 +555,10 @@ async def analyze_job(
         raise HTTPException(status_code=404, detail="Resume not found")
 
     try:
+        import time as _time
+        _start = _time.monotonic()
         result = await analyze_match(resume["content"], job["raw_description"], provider)
+        duration_seconds = int(_time.monotonic() - _start)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
 
@@ -564,8 +578,9 @@ async def analyze_job(
            (job_id, resume_id, score, adjusted_score, penalty_breakdown,
             matched_skills, missing_skills, reasoning, llm_provider, llm_model,
             matched_skills_v2, missing_skills_v2, suggestions,
-            validation_errors, retry_count, used_fallback)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            validation_errors, retry_count, used_fallback, duration_seconds,
+            analysis_mode)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job_id,
             resume_id,
@@ -583,6 +598,8 @@ async def analyze_job(
             result.get("validation_errors", ""),
             result.get("retry_count", 0),
             1 if result.get("used_fallback") else 0,
+            duration_seconds,
+            os.getenv("ANALYSIS_MODE", "standard"),
         ),
     )
     await db.commit()

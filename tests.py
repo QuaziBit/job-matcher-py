@@ -459,6 +459,7 @@ class TestBuildUserPrompt(unittest.TestCase):
 
 
 class TestAnalyzeWithAnthropic(unittest.TestCase):
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test-key"})
     @patch("analyzer.anthropic.Anthropic")
     def test_returns_parsed_result_with_provider(self, mock_cls):
         from analyzer import analyze_with_anthropic, ANTHROPIC_MODEL
@@ -476,6 +477,7 @@ class TestAnalyzeWithAnthropic(unittest.TestCase):
         skill_names = [s["skill"] if isinstance(s, dict) else s for s in result["matched_skills"]]
         self.assertIn("Python", skill_names)
 
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test-key"})
     @patch("analyzer.anthropic.Anthropic")
     def test_calls_correct_model(self, mock_cls):
         from analyzer import ANTHROPIC_MODEL

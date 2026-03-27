@@ -94,6 +94,7 @@ def render_launcher_page(cfg: dict) -> str:
     ollama_url    = cfg.get("ollama_base_url", "http://localhost:11434")
     ollama_model  = cfg.get("ollama_model", "llama3.1:8b")
     ollama_timeout = cfg.get("ollama_timeout", 600)
+    analysis_mode = cfg.get("analysis_mode", "standard")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -132,6 +133,16 @@ input,select{{background:var(--bg3);border:1px solid var(--border);color:var(--t
   font-size:13px;width:100%;outline:none;transition:border-color .15s;}}
 input:focus,select:focus{{border-color:var(--amber);}}
 select option{{background:var(--bg3);}}
+.toggle-group{{display:flex;gap:8px;flex-wrap:wrap;}}
+.toggle-option{{display:flex;flex-direction:column;flex:1;min-width:100px;
+  border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;
+  cursor:pointer;transition:border-color .15s;}}
+.toggle-option:has(input:checked){{border-color:var(--amber);background:rgba(245,158,11,.06);}}
+.toggle-option input{{display:none;}}
+.toggle-option span{{font-size:12px;font-weight:600;color:var(--text);text-transform:none;
+  letter-spacing:0;margin:0;}}
+.toggle-option small{{font-size:10px;color:var(--text-dim);margin-top:3px;
+  text-transform:none;letter-spacing:0;}}
 .health-row{{display:flex;align-items:flex-start;gap:10px;
   padding:10px 12px;background:var(--bg3);border:1px solid var(--border);
   border-radius:var(--radius);margin-bottom:8px;}}
@@ -239,6 +250,29 @@ select option{{background:var(--bg3);}}
         <label>Ollama Timeout (seconds)</label>
         <input type="number" id="ollama_timeout" value="{ollama_timeout}" min="30"/>
       </div>
+      <div class="form-row">
+        <label>Analysis Mode</label>
+        <div class="toggle-group">
+          <label class="toggle-option">
+            <input type="radio" name="analysis_mode" value="fast"
+              {'checked' if analysis_mode == 'fast' else ''}/>
+            <span>Fast</span>
+            <small>~30s · short snippets · no suggestions</small>
+          </label>
+          <label class="toggle-option">
+            <input type="radio" name="analysis_mode" value="standard"
+              {'checked' if analysis_mode == 'standard' else ''}/>
+            <span>Standard</span>
+            <small>~90s · medium snippets · suggestions on</small>
+          </label>
+          <label class="toggle-option">
+            <input type="radio" name="analysis_mode" value="detailed"
+              {'checked' if analysis_mode == 'detailed' else ''}/>
+            <span>Detailed</span>
+            <small>~4min · full snippets · all skills</small>
+          </label>
+        </div>
+      </div>
     </div>
 
     <!-- Start button -->
@@ -334,6 +368,8 @@ function buildFormData() {{
   fd.append('ollama_base_url',   ($('ollama_base_url')  || {{value:''}}).value);
   fd.append('ollama_model',      ($('ollama_model')     || {{value:''}}).value);
   fd.append('ollama_timeout',    ($('ollama_timeout')   || {{value:''}}).value);
+  const modeEl = document.querySelector('input[name="analysis_mode"]:checked');
+  fd.append('analysis_mode', modeEl ? modeEl.value : 'standard');
   return fd;
 }}
 
@@ -531,6 +567,11 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     cfg["ollama_timeout"] = t
             except ValueError:
                 logger.warning(f"✗ Invalid timeout {v!r}")
+        if v := form.get("analysis_mode", ""):
+            if v in ("fast", "standard", "detailed"):
+                cfg["analysis_mode"] = v
+            else:
+                logger.warning(f"✗ Invalid analysis_mode {v!r}")
 
         key = cfg.get("anthropic_api_key", "")
         masked = (key[:12] + "...") if key else "not set"
@@ -610,6 +651,7 @@ class Launcher:
                 "OLLAMA_TIMEOUT":    str(cfg.get("ollama_timeout", 600)),
                 "APP_PORT":          str(cfg.get("port", 8000)),
                 "APP_HOST":          cfg.get("host", "127.0.0.1"),
+                "ANALYSIS_MODE":     cfg.get("analysis_mode", "standard"),
             }
 
             # Update existing lines

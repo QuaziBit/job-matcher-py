@@ -80,8 +80,21 @@
         id="analyze-btn"
         class="btn btn-primary"
         onclick="analyzeJob({{ job.id }})"
+        data-mode="{{ analysis_mode }}"
         {% if not resumes %}disabled{% endif %}
       >Run Analysis</button>
+
+      <!-- Progress bar — shown while analysis is running -->
+      <div id="analysis-progress" class="analysis-progress hidden">
+        <div class="progress-header">
+          <span class="progress-spinner"></span>
+          <span id="progress-label">Analyzing...</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-meta" id="progress-meta"></div>
+      </div>
 
       <!-- Scoring explanation matrix -->
       <details class="score-explainer">
@@ -171,7 +184,7 @@
 
           <div class="score-meter" id="meter-{{ loop.index }}"></div>
           <div class="analysis-meta" style="flex:1;">
-            {{ a.resume_label }} · {{ a.llm_provider }}{% if a.llm_model %} ({{ a.llm_model }}){% endif %} · {{ a.created_at[:16] }}
+            {{ a.resume_label }} · {{ a.llm_provider }}{% if a.llm_model %} ({{ a.llm_model }}){% endif %} · {{ a.created_at[:16] }}{% if a.duration_seconds %} · {{ a.duration_seconds | format_duration }}{% endif %}{% if a.analysis_mode %} · {{ a.analysis_mode }}{% endif %}
           </div>
 
           <!-- Delete this analysis -->
