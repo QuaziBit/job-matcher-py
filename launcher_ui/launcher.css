@@ -217,3 +217,44 @@ select option { background: var(--bg3); }
 
 .restart-note { margin-top: 10px; font-size: 11px; color: var(--text-dim); font-family: var(--mono); }
 .hidden { display: none !important; }
+
+/* ── Layout toggle button ────────────────────────────────────────────────────── */
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.header-left { display: flex; flex-direction: column; }
+
+.layout-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all .15s;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.layout-toggle:hover { border-color: var(--amber); color: var(--amber); }
+.layout-toggle.active { border-color: var(--amber); color: var(--amber); background: rgba(245,158,11,.08); }
+
+/* ── Horizontal layout ───────────────────────────────────────────────────────── */
+.card.horizontal {
+  max-width: 920px;
+}
+
+.h-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.h-col {
+  min-width: 0;
+}

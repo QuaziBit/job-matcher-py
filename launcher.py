@@ -289,7 +289,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
         cfg  = self._parse_config_from_form(form)
         self.launcher.update_config(cfg)
         url  = f"http://{cfg['host']}:{cfg['port']}"
-        self.send_json({"ok": True, "url": url})
+        self.send_json({"ok": True, "url": url, "analysis_mode": cfg.get("analysis_mode", "standard")})
         threading.Thread(target=self.launcher._signal_restart, daemon=True).start()
 
 

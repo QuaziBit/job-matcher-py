@@ -705,6 +705,7 @@ if __name__ == "__main__":
         "ollama_base_url":   os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model":      os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         "ollama_timeout":    int(os.getenv("OLLAMA_TIMEOUT", "600")),
+        "analysis_mode":     os.getenv("ANALYSIS_MODE", "standard"),
     }
 
     # ── Start launcher ───────────────────────────────────────────────────────

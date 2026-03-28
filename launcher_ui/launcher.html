@@ -7,14 +7,18 @@
 <link rel="stylesheet" href="/launcher_ui/launcher.css"/>
 </head>
 <body>
-<div class="card">
+<div class="card" id="card">
   <div class="card-header">
-    <div class="logo-mark">// job-matcher</div>
-    <h1>Launcher</h1>
+    <div class="header-left">
+      <div class="logo-mark">// job-matcher</div>
+      <h1>Launcher</h1>
+    </div>
+    <button class="layout-toggle" id="layout-toggle" onclick="toggleLayout()" title="Toggle layout">⇔</button>
   </div>
-  <div class="card-body">
 
-    <!-- Health Status -->
+  <!-- VERTICAL layout (default) -->
+  <div class="card-body" id="layout-vertical">
+
     <div class="section">
       <div class="section-title">System Status</div>
       <div id="health-sqlite" class="health-row loading">
@@ -31,7 +35,6 @@
       </div>
     </div>
 
-    <!-- Server -->
     <div class="section">
       <div class="section-title">Server</div>
       <div class="form-grid">
@@ -46,7 +49,6 @@
       </div>
     </div>
 
-    <!-- Database -->
     <div class="section">
       <div class="section-title">Database</div>
       <div class="form-row">
@@ -56,7 +58,6 @@
       </div>
     </div>
 
-    <!-- LLM Providers -->
     <div class="section">
       <div class="section-title">LLM Providers</div>
       <div class="form-row">
@@ -101,12 +102,10 @@
       </div>
     </div>
 
-    <!-- Start button -->
     <button class="btn btn-primary" id="start-btn" onclick="startApp()">
       ▶ &nbsp;Start Job Matcher
     </button>
 
-    <!-- Running panel (shown after Start) -->
     <div id="running-panel" class="hidden">
       <div class="url-display">
         <span class="url-text" id="url-text"></span>
@@ -121,6 +120,118 @@
     </div>
 
   </div>
+
+  <!-- HORIZONTAL layout -->
+  <div class="card-body hidden" id="layout-horizontal">
+    <div class="h-layout">
+
+      <div class="h-col">
+        <div class="section">
+          <div class="section-title">System Status</div>
+          <div id="h-health-sqlite" class="health-row loading">
+            <div class="health-icon"></div>
+            <div><div class="health-label">SQLite</div><div class="health-msg">Checking…</div></div>
+          </div>
+          <div id="h-health-ollama" class="health-row loading">
+            <div class="health-icon"></div>
+            <div><div class="health-label">Ollama</div><div class="health-msg">Checking…</div></div>
+          </div>
+          <div id="h-health-anthropic" class="health-row loading">
+            <div class="health-icon"></div>
+            <div><div class="health-label">Anthropic API</div><div class="health-msg">Checking…</div></div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Server</div>
+          <div class="form-grid">
+            <div class="form-row" style="margin:0;">
+              <label>Port</label>
+              <input type="number" id="h-port" value="{port}" min="1024" max="65535"/>
+            </div>
+            <div class="form-row" style="margin:0;">
+              <label>Host</label>
+              <input type="text" id="h-host" value="{host}"/>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Database</div>
+          <div class="form-row">
+            <label>SQLite Path</label>
+            <input type="text" id="h-db_path" value="{db_path}"
+                   placeholder="./job_matcher.db" oninput="scheduleHealthCheck()"/>
+          </div>
+        </div>
+      </div>
+
+      <div class="h-col">
+        <div class="section">
+          <div class="section-title">LLM Providers</div>
+          <div class="form-row">
+            <label>Anthropic API Key</label>
+            <input type="password" id="h-anthropic_api_key" value="{api_key}"
+                   placeholder="sk-ant-..." oninput="scheduleHealthCheck()"/>
+          </div>
+          <div class="form-row">
+            <label>Ollama URL</label>
+            <input type="text" id="h-ollama_base_url" value="{ollama_url}"
+                   oninput="scheduleHealthCheck()"/>
+          </div>
+          <div class="form-row">
+            <label>Ollama Model</label>
+            <select id="h-ollama_model">
+              <option value="{ollama_model}">{ollama_model}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Ollama Timeout (seconds)</label>
+            <input type="number" id="h-ollama_timeout" value="{ollama_timeout}" min="30"/>
+          </div>
+          <div class="form-row">
+            <label>Analysis Mode</label>
+            <div class="toggle-group">
+              <label class="toggle-option">
+                <input type="radio" name="h-analysis_mode" value="fast" {checked_fast}/>
+                <span>Fast</span>
+                <small>~30s</small>
+              </label>
+              <label class="toggle-option">
+                <input type="radio" name="h-analysis_mode" value="standard" {checked_standard}/>
+                <span>Standard</span>
+                <small>~90s</small>
+              </label>
+              <label class="toggle-option">
+                <input type="radio" name="h-analysis_mode" value="detailed" {checked_detailed}/>
+                <span>Detailed</span>
+                <small>~4min</small>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" id="h-start-btn" onclick="startApp()">
+          ▶ &nbsp;Start Job Matcher
+        </button>
+
+        <div id="h-running-panel" class="hidden">
+          <div class="url-display">
+            <span class="url-text" id="h-url-text"></span>
+            <a class="url-link" id="h-url-link" href="#" target="_blank">Open ↗</a>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-ghost"   onclick="openApp()">🌐 &nbsp;Open App</button>
+            <button class="btn btn-warning" id="h-restart-btn" onclick="restartApp()">↺ &nbsp;Restart</button>
+            <button class="btn btn-danger"  id="h-stop-btn"    onclick="stopApp()">■ &nbsp;Stop</button>
+          </div>
+          <div class="restart-note">Change model or port above, then click Restart to apply.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
 </div>
 <script src="/launcher_ui/launcher.js"></script>
 </body>
