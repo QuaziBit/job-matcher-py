@@ -383,6 +383,7 @@ label {
   letter-spacing: 0.08em;
   color: var(--text-dim);
   cursor: pointer;
+  -webkit-user-select: none;
   user-select: none;
   background: var(--bg3);
   list-style: none;
