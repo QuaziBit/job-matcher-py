@@ -819,3 +819,36 @@ label {
   color: var(--text-mute);
   font-family: var(--font-mono);
 }
+
+/* ── Salary estimate ─────────────────────────────────────────────────────────── */
+.salary-badge-wrap { display: flex; align-items: center; gap: 8px; }
+.salary-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+.salary-high   { background: rgba(34,197,94,.12);  color: var(--green); border: 1px solid rgba(34,197,94,.3); }
+.salary-medium { background: rgba(245,158,11,.12); color: var(--amber); border: 1px solid rgba(245,158,11,.3); }
+.salary-low    { background: var(--bg3);            color: var(--text-dim); border: 1px solid var(--border); }
+.salary-confidence {
+  font-size: 10px;
+  opacity: 0.7;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.btn-inline-mute {
+  background: none;
+  border: none;
+  color: var(--text-mute);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  font-family: var(--font-mono);
+}
+.btn-inline-mute:hover { color: var(--amber); }

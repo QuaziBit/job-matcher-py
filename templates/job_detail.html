@@ -27,6 +27,19 @@
       <span style="color: var(--text-mute);">· pasted description</span>
     {% endif %}
   </div>
+  {% if salary_estimate %}
+  <div class="salary-badge-wrap" style="margin-top: 8px;">
+    <span class="salary-badge salary-{{ salary_estimate.confidence }}">
+      {% if salary_estimate.source == 'posted' %}📌{% else %}~{% endif %}
+      ${{ "{:,}".format(salary_estimate.min) }} – ${{ "{:,}".format(salary_estimate.max) }} / yr
+      <span class="salary-confidence">
+        {{ salary_estimate.source or 'estimated' }} · {{ salary_estimate.confidence }} confidence
+        · {{ salary_estimate.llm_provider }}{% if salary_estimate.llm_model %} ({{ salary_estimate.llm_model }}){% endif %}
+      </span>
+    </span>
+    <button class="btn-inline-mute" onclick="clearSalaryEstimate({{ job.id }})" title="Clear">✕</button>
+  </div>
+  {% endif %}
 </div>
 
 <!-- Tabs -->
@@ -55,7 +68,7 @@
           {% if resumes %}
             <select id="analyze-resume">
               {% for r in resumes %}
-              <option value="{{ r.id }}">{{ r.label }}</option>
+              <option value="{{ r.id }}" {% if r.id == last_resume_id %}selected{% endif %}>{{ r.label }}</option>
               {% endfor %}
             </select>
           {% else %}
@@ -68,9 +81,9 @@
         <div class="form-row" style="margin:0;">
           <label>LLM Provider</label>
           <div class="llm-toggle">
-            <input type="radio" name="provider" id="p-anthropic" value="anthropic" checked />
+            <input type="radio" name="provider" id="p-anthropic" value="anthropic" {% if last_provider == 'anthropic' or not last_provider %}checked{% endif %} />
             <label for="p-anthropic">Anthropic</label>
-            <input type="radio" name="provider" id="p-ollama" value="ollama" />
+            <input type="radio" name="provider" id="p-ollama" value="ollama" {% if last_provider == 'ollama' %}checked{% endif %} />
             <label for="p-ollama">Ollama ({{ ollama_model }})</label>
           </div>
         </div>
@@ -83,6 +96,20 @@
         data-mode="{{ analysis_mode }}"
         {% if not resumes %}disabled{% endif %}
       >Run Analysis</button>
+
+      <div style="margin-top: 10px; display: flex; align-items: center; gap: 10px;">
+        {% if not salary_estimate %}
+        <button id="salary-btn" class="btn btn-ghost btn-sm"
+                onclick="estimateSalary({{ job.id }})">
+          💰 {% if has_salary_in_jd %}Extract{% else %}Estimate{% endif %} Salary
+        </button>
+        {% else %}
+        <span class="text-xs text-dim" style="font-family: var(--font-mono);">
+          Salary {{ salary_estimate.source or 'estimate' }} cached —
+          <button class="btn-inline-mute" onclick="rerunSalaryEstimate({{ job.id }})">re-run</button>
+        </span>
+        {% endif %}
+      </div>
 
       <!-- Progress bar — shown while analysis is running -->
       <div id="analysis-progress" class="analysis-progress hidden">

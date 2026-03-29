@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 import aiosqlite
 from database import get_db, init_db
 from scraper import scrape_job, assess_job_text_quality
-from analyzer import analyze_match, _ollama_model
+from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model
 
 load_dotenv()
 
@@ -255,16 +255,32 @@ async def job_detail(job_id: int, request: Request, db: aiosqlite.Connection = D
     # Resume comparison (shown when 2+ different resumes analyzed)
     comparison = _build_comparison(analyses)
 
+    # Default resume + provider selection — use values from the most recent analysis
+    last_resume_id = analyses[0]["resume_id"] if analyses else None
+
+    # Provider priority: most recent analysis → salary estimate → fallback anthropic
+    salary_data = json.loads(job["salary_estimate"]) if job.get("salary_estimate") else None
+    if analyses:
+        last_provider = analyses[0]["llm_provider"]
+    elif salary_data and salary_data.get("llm_provider"):
+        last_provider = salary_data["llm_provider"]
+    else:
+        last_provider = "anthropic"
+
     return templates.TemplateResponse("job_detail.html", {
-        "request":       request,
-        "job":           job,
-        "application":   application,
-        "analyses":      analyses,
-        "resumes":       resumes,
-        "ollama_model":  _ollama_model(),
-        "text_quality":  text_quality,
-        "comparison":    comparison,
-        "analysis_mode": os.getenv("ANALYSIS_MODE", "standard"),
+        "request":        request,
+        "job":            job,
+        "application":    application,
+        "analyses":       analyses,
+        "resumes":        resumes,
+        "ollama_model":   _ollama_model(),
+        "text_quality":   text_quality,
+        "comparison":     comparison,
+        "analysis_mode":  os.getenv("ANALYSIS_MODE", "standard"),
+        "salary_estimate": json.loads(job["salary_estimate"]) if job.get("salary_estimate") else None,
+        "has_salary_in_jd": _job_has_salary(job.get("raw_description", "")),
+        "last_resume_id": last_resume_id,
+        "last_provider":   last_provider,
     })
 
 
@@ -605,6 +621,91 @@ async def analyze_job(
     await db.commit()
     return JSONResponse(result)
 
+
+@app.post("/api/jobs/{job_id}/estimate-salary")
+async def estimate_job_salary(
+    job_id: int,
+    provider: str = Form("anthropic"),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Estimate salary for a job using the LLM if no salary is in the JD."""
+    async with db.execute(
+        "SELECT title, company, location, raw_description, salary_estimate FROM jobs WHERE id = ?",
+        (job_id,)
+    ) as cur:
+        job = await cur.fetchone()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Return cached estimate if already computed
+    if job["salary_estimate"]:
+        return JSONResponse(json.loads(job["salary_estimate"]))
+
+    # Models known to be incompatible with salary estimation (return zeros or malformed JSON)
+    SALARY_INCOMPATIBLE_MODELS = ["gemma3"]
+    if provider == "ollama":
+        current_model = _ollama_model()
+        if any(m in current_model for m in SALARY_INCOMPATIBLE_MODELS):
+            return JSONResponse(
+                {"error": f"{current_model} is not supported for salary estimation. Please switch to Anthropic or llama3.1:8b."},
+                status_code=422,
+            )
+
+    has_salary = _job_has_salary(job["raw_description"] or "")
+
+    try:
+        if has_salary:
+            try:
+                result = await extract_salary(
+                    title=job["title"] or "",
+                    company=job["company"] or "",
+                    location=job["location"] or "",
+                    job_description=job["raw_description"] or "",
+                    provider=provider,
+                )
+            except ValueError:
+                # Salary detected in JD but excerpt was truncated or unreadable —
+                # fall back to estimation instead of failing
+                print(f"→ extract_salary failed for job {job_id}, falling back to estimate_salary")
+                result = await estimate_salary(
+                    title=job["title"] or "",
+                    company=job["company"] or "",
+                    location=job["location"] or "",
+                    job_description=job["raw_description"] or "",
+                    provider=provider,
+                    _skip_salary_check=True,
+                )
+                result["source"] = "estimated"
+        else:
+            result = await estimate_salary(
+                title=job["title"] or "",
+                company=job["company"] or "",
+                location=job["location"] or "",
+                job_description=job["raw_description"] or "",
+                provider=provider,
+            )
+            result["source"] = "estimated"
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+
+    # Persist to DB
+    await db.execute(
+        "UPDATE jobs SET salary_estimate = ? WHERE id = ?",
+        (json.dumps(result), job_id)
+    )
+    await db.commit()
+    return JSONResponse(result)
+
+
+@app.delete("/api/jobs/{job_id}/salary-estimate")
+async def clear_salary_estimate(
+    job_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Clear a cached salary estimate so it can be re-run."""
+    await db.execute("UPDATE jobs SET salary_estimate = '' WHERE id = ?", (job_id,))
+    await db.commit()
+    return JSONResponse({"ok": True})
 
 @app.post("/api/jobs/{job_id}/application")
 async def upsert_application(

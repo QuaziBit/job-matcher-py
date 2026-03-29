@@ -816,3 +816,78 @@ document.addEventListener('DOMContentLoaded', () => {
   restoreFromURL();
   fetchJobs();
 });
+
+
+// =============================================== //
+// == Salary estimation ========================== //
+// =============================================== //
+
+async function estimateSalary(jobId) {
+  log('estimateSalary', 'job ' + jobId);
+  const btn = document.getElementById('salary-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Estimating…'; }
+
+  const provider = document.querySelector('input[name="provider"]:checked')?.value || 'anthropic';
+  const fd = new FormData();
+  fd.append('provider', provider);
+
+  try {
+    const res  = await fetch(`/api/jobs/${jobId}/estimate-salary`, { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      toast(data.error || 'Salary estimation failed', 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = '💰 Estimate Salary'; }
+      return;
+    }
+    toast('Salary estimate saved', 'success');
+    setTimeout(() => location.reload(), 800);
+  } catch(e) {
+    logErr('estimateSalary', e);
+    toast('Salary estimation failed', 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = '💰 Estimate Salary'; }
+  }
+}
+
+async function clearSalaryEstimate(jobId) {
+  // X button — just remove the estimate and reload, do not re-run
+  log('clearSalaryEstimate', 'job ' + jobId);
+  try {
+    await fetch(`/api/jobs/${jobId}/salary-estimate`, { method: 'DELETE' });
+    location.reload();
+  } catch(e) {
+    logErr('clearSalaryEstimate', e);
+    location.reload();
+  }
+}
+
+async function rerunSalaryEstimate(jobId) {
+  // re-run link — delete then immediately re-estimate
+  log('rerunSalaryEstimate', 'job ' + jobId);
+
+  // Show spinner on the re-run button
+  const btn = document.querySelector(`button[onclick="rerunSalaryEstimate(${jobId})"]`);
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:middle;"></span> re-running…'; }
+
+  try {
+    await fetch(`/api/jobs/${jobId}/salary-estimate`, { method: 'DELETE' });
+  } catch(e) {
+    logErr('rerunSalaryEstimate', e);
+  }
+  const provider = document.querySelector('input[name="provider"]:checked')?.value || 'anthropic';
+  const fd = new FormData();
+  fd.append('provider', provider);
+  try {
+    const res  = await fetch(`/api/jobs/${jobId}/estimate-salary`, { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      toast(data.error || 'Salary estimation failed', 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = 're-run'; }
+    } else {
+      toast('Salary updated', 'success');
+      setTimeout(() => location.reload(), 600);
+    }
+  } catch(e) {
+    logErr('rerunSalaryEstimate', e);
+    location.reload();
+  }
+}

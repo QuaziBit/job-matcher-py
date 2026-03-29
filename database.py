@@ -110,6 +110,7 @@ async def init_db():
             "ALTER TABLE analyses ADD COLUMN used_fallback INTEGER DEFAULT 0",
             "ALTER TABLE analyses ADD COLUMN duration_seconds INTEGER DEFAULT 0",
             "ALTER TABLE analyses ADD COLUMN analysis_mode TEXT DEFAULT 'standard'",
+            "ALTER TABLE jobs ADD COLUMN salary_estimate TEXT DEFAULT ''",
         ]:
             try:
                 await db.execute(migration)
