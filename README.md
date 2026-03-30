@@ -344,13 +344,38 @@ May not work if the page:
 ```
 job-matcher-py/
 ├── main.py              FastAPI app — all routes and request handling
+├── health.py            Startup health checks (SQLite, Ollama, Anthropic)
+├── utils.py             Shared helpers (format_duration, build_comparison)
+├── skills.py
 ├── launcher.py          Browser-based launcher (health checks, Start/Stop/Restart)
+├── launcher_ui/
+│   ├── launcher.css
+│   ├── launcher.html
+│   └── launcher.js
 ├── database.py          SQLite schema init and async connection helper
 ├── scraper.py           URL fetching, HTML parsing, metadata extraction
 ├── ollama_utils.py      Ollama API client with error handling
-├── analyzer.py          LLM prompt construction, API calls, penalty pipeline
-├── tests.py             Full unit + integration test suite
-├── screenshots/            Example screenshots for the README
+├── analyzer/            LLM prompt construction, API calls, penalty pipeline
+│   ├── __init__.py
+│   ├── config.py
+│   ├── llm.py
+│   ├── parsers.py
+│   ├── penalties.py
+│   ├── prompts.py
+│   ├── salary.py
+│   └── skills_helpers.py
+├── run_tests.py         Test runner script
+├── tests/               Full unit + integration test suite
+│   ├── __init__.py
+│   ├── mock_data.py
+│   ├── test_analyzer.py
+│   ├── test_api.py
+│   ├── test_database.py
+│   ├── test_salary.py
+│   └── test_scraper.py
+├── tests_js/            Browser-based JavaScript tests (no dependencies)
+│   └── test_app.html
+├── screenshots/         Example screenshots for the README
 ├── templates/
 │   ├── base.html        Sidebar layout shell
 │   ├── index.html       Jobs list page
