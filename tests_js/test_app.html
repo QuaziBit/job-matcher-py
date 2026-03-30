@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>app.js — Unit Tests</title>
+  <style>
+    body        { font-family: monospace; background: #1a1a1a; color: #ccc; padding: 24px; }
+    h1          { color: #fff; font-size: 1.1em; margin-bottom: 16px; }
+    .section    { color: #64b5f6; font-weight: bold; margin: 16px 0 4px; }
+    .pass       { color: #81c784; }
+    .fail       { color: #e57373; }
+    .summary    { margin-top: 20px; font-weight: bold; font-size: 1.05em; }
+    .summary.ok { color: #81c784; }
+    .summary.ko { color: #e57373; }
+
+    /* Minimal DOM stubs so app.js loads without errors */
+    #toast, #jobs-list, #jobs-loading, #jobs-error, #jobs-error-text,
+    #no-results, #empty-state, #pagination-bar, #pagination-info,
+    #page-indicator, #prev-btn, #next-btn,
+    #analysis-progress, #progress-label, #progress-fill, #progress-meta,
+    #filter-search, #filter-status, #filter-score, #filter-provider
+    { display: none; }
+  </style>
+</head>
+<body>
+
+<!-- ── Minimal DOM stubs required by app.js ─────────────────────────────── -->
+<div id="toast"></div>
+<div id="jobs-list"></div>
+<div id="jobs-loading"></div>
+<div id="jobs-error"><span id="jobs-error-text"></span></div>
+<div id="no-results"></div>
+<div id="empty-state"></div>
+<div id="pagination-bar">
+  <span id="pagination-info"></span>
+  <span id="page-indicator"></span>
+  <button id="prev-btn"></button>
+  <button id="next-btn"></button>
+</div>
+<div id="analysis-progress">
+  <span id="progress-label"></span>
+  <div  id="progress-fill"></div>
+  <span id="progress-meta"></span>
+</div>
+<input id="filter-search"   type="text"   value="">
+<select id="filter-status">
+  <option value=""></option>
+  <option value="applied">applied</option>
+  <option value="interviewing">interviewing</option>
+</select>
+<select id="filter-score">
+  <option value=""></option>
+  <option value="3">3</option>
+  <option value="4">4</option>
+</select>
+<select id="filter-provider">
+  <option value=""></option>
+  <option value="anthropic">anthropic</option>
+  <option value="ollama">ollama</option>
+</select>
+
+<!-- ── Load app.js ──────────────────────────────────────────────────────── -->
+<script src="../static/js/app.js"></script>
+
+<!-- ── Test runner ──────────────────────────────────────────────────────── -->
+<script>
+"use strict";
+
+// ── Runner ────────────────────────────────────────────────────────────────────
+
+const output = [];
+let _passed = 0, _failed = 0, _currentSection = "";
+
+function section(name) {
+  _currentSection = name;
+  output.push({ type: "section", name });
+  console.log(`\n── ${name}`);
+}
+
+function test(name, fn) {
+  try {
+    fn();
+    _passed++;
+    output.push({ type: "pass", name });
+    console.log(`  ✓ ${name}`);
+  } catch(e) {
+    _failed++;
+    output.push({ type: "fail", name, msg: e.message });
+    console.error(`  ✗ ${name} — ${e.message}`);
+  }
+}
+
+function assert(condition, msg) {
+  if (!condition) throw new Error(msg || "assertion failed");
+}
+
+function assertEqual(a, b) {
+  if (a !== b) throw new Error(`expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
+}
+
+function assertContains(str, sub) {
+  if (!str.includes(sub)) throw new Error(`expected "${str}" to contain "${sub}"`);
+}
+
+function assertClass(el, cls) {
+  if (!el.classList.contains(cls)) throw new Error(`expected element to have class "${cls}", got "${el.className}"`);
+}
+
+function assertNotClass(el, cls) {
+  if (el.classList.contains(cls)) throw new Error(`expected element NOT to have class "${cls}"`);
+}
+
+
+// ── formatElapsed ─────────────────────────────────────────────────────────────
+
+section("formatElapsed");
+
+test("0 seconds", ()    => assertEqual(formatElapsed(0),    "0s"));
+test("1 second", ()     => assertEqual(formatElapsed(1),    "1s"));
+test("45 seconds", ()   => assertEqual(formatElapsed(45),   "45s"));
+test("59 seconds", ()   => assertEqual(formatElapsed(59),   "59s"));
+test("60 seconds = 1:00", () => assertEqual(formatElapsed(60),   "1:00"));
+test("90 seconds = 1:30", () => assertEqual(formatElapsed(90),   "1:30"));
+test("61 seconds = 1:01", () => assertEqual(formatElapsed(61),   "1:01"));
+test("3600 seconds = 60:00", () => assertEqual(formatElapsed(3600), "60:00"));
+test("3661 seconds = 61:01", () => assertEqual(formatElapsed(3661), "61:01"));
+test("pads single-digit seconds", () => assertEqual(formatElapsed(65), "1:05"));
+
+
+// ── toast ─────────────────────────────────────────────────────────────────────
+
+section("toast");
+
+test("shows message text", () => {
+  toast("hello world", "info");
+  assertEqual(document.getElementById("toast").textContent, "hello world");
+});
+
+test("sets info class", () => {
+  toast("msg", "info");
+  assertContains(document.getElementById("toast").className, "info");
+});
+
+test("sets success class", () => {
+  toast("msg", "success");
+  assertContains(document.getElementById("toast").className, "success");
+});
+
+test("sets error class", () => {
+  toast("msg", "error");
+  assertContains(document.getElementById("toast").className, "error");
+});
+
+test("defaults to info type", () => {
+  toast("msg");
+  assertContains(document.getElementById("toast").className, "info");
+});
+
+
+// ── renderMeter ───────────────────────────────────────────────────────────────
+
+section("renderMeter");
+
+test("renders 5 pips", () => {
+  const div = document.createElement("div");
+  renderMeter(3, div);
+  assertEqual(div.querySelectorAll(".score-pip").length, 5);
+});
+
+test("score 3 — 3 filled pips", () => {
+  const div = document.createElement("div");
+  renderMeter(3, div);
+  const filled = div.querySelectorAll(".filled-3").length;
+  assertEqual(filled, 3);
+});
+
+test("score 5 — 5 filled pips", () => {
+  const div = document.createElement("div");
+  renderMeter(5, div);
+  assertEqual(div.querySelectorAll(".filled-5").length, 5);
+});
+
+test("score 1 — 1 filled pip", () => {
+  const div = document.createElement("div");
+  renderMeter(1, div);
+  assertEqual(div.querySelectorAll(".filled-1").length, 1);
+});
+
+test("clears previous content", () => {
+  const div = document.createElement("div");
+  div.innerHTML = "<span>old</span>";
+  renderMeter(2, div);
+  assertEqual(div.querySelectorAll("span").length, 0);
+});
+
+
+// ── hasActiveFilter ───────────────────────────────────────────────────────────
+
+section("hasActiveFilter");
+
+test("false when all filters empty", () => {
+  ["filter-search","filter-status","filter-score","filter-provider"]
+    .forEach(id => { document.getElementById(id).value = ""; });
+  assertEqual(hasActiveFilter(), false);
+});
+
+test("true when search has value", () => {
+  document.getElementById("filter-search").value = "python";
+  assertEqual(hasActiveFilter(), true);
+  document.getElementById("filter-search").value = "";
+});
+
+test("true when status has value", () => {
+  document.getElementById("filter-status").value = "applied";
+  assertEqual(hasActiveFilter(), true);
+  document.getElementById("filter-status").value = "";
+});
+
+test("true when score has value", () => {
+  document.getElementById("filter-score").value = "4";
+  assertEqual(hasActiveFilter(), true);
+  document.getElementById("filter-score").value = "";
+});
+
+test("true when provider has value", () => {
+  document.getElementById("filter-provider").value = "anthropic";
+  assertEqual(hasActiveFilter(), true);
+  document.getElementById("filter-provider").value = "";
+});
+
+
+// ── toggleSnippets ────────────────────────────────────────────────────────────
+
+section("toggleSnippets");
+
+test("shows hidden container", () => {
+  const btn = document.createElement("button");
+  const div = document.createElement("div");
+  div.style.display = "none";
+  btn.after(div); // btn.nextElementSibling = div
+  const wrap = document.createElement("div");
+  wrap.appendChild(btn);
+  wrap.appendChild(div);
+  document.body.appendChild(wrap);
+
+  toggleSnippets(btn);
+  assertEqual(div.style.display, "block");
+  document.body.removeChild(wrap);
+});
+
+test("hides visible container", () => {
+  const btn = document.createElement("button");
+  const div = document.createElement("div");
+  div.style.display = "block";
+  const wrap = document.createElement("div");
+  wrap.appendChild(btn);
+  wrap.appendChild(div);
+  document.body.appendChild(wrap);
+
+  toggleSnippets(btn);
+  assertEqual(div.style.display, "none");
+  document.body.removeChild(wrap);
+});
+
+test("updates button text to show arrow when expanding", () => {
+  const btn = document.createElement("button");
+  const div = document.createElement("div");
+  div.style.display = "none";
+  const wrap = document.createElement("div");
+  wrap.appendChild(btn);
+  wrap.appendChild(div);
+  document.body.appendChild(wrap);
+
+  toggleSnippets(btn);
+  assertContains(btn.innerHTML, "▼");
+  document.body.removeChild(wrap);
+});
+
+test("updates button text to right arrow when collapsing", () => {
+  const btn = document.createElement("button");
+  const div = document.createElement("div");
+  div.style.display = "block";
+  const wrap = document.createElement("div");
+  wrap.appendChild(btn);
+  wrap.appendChild(div);
+  document.body.appendChild(wrap);
+
+  toggleSnippets(btn);
+  // &#9658; renders as ► in innerHTML
+  assert(btn.innerHTML.includes("&#9658;") || btn.innerHTML.includes("►"), `btn.innerHTML="${btn.innerHTML}" missing right arrow`);
+  document.body.removeChild(wrap);
+});
+
+
+// ── renderJobs ────────────────────────────────────────────────────────────────
+
+section("renderJobs");
+
+function makeJobsDOM() {
+  // Reset jobs-list content and make it visible for tests
+  const list = document.getElementById("jobs-list");
+  list.style.display = "block";
+  list.innerHTML = "";
+  document.getElementById("no-results").classList.add("hidden");
+  document.getElementById("empty-state").classList.add("hidden");
+  document.getElementById("pagination-bar").style.display = "none";
+  // Clear all filters
+  ["filter-search","filter-status","filter-score","filter-provider"]
+    .forEach(id => { document.getElementById(id).value = ""; });
+}
+
+test("renders job links", () => {
+  makeJobsDOM();
+  renderJobs({ total: 1, jobs: [
+    { id: 42, title: "Python Dev", company: "Acme", location: "DC",
+      status: "applied", url: "https://example.com", is_manual: false,
+      adjusted_score: 4, best_score: 4, provider: "anthropic" }
+  ]});
+  const links = document.getElementById("jobs-list").querySelectorAll("a.job-item");
+  assertEqual(links.length, 1);
+});
+
+test("job link href contains job id", () => {
+  makeJobsDOM();
+  renderJobs({ total: 1, jobs: [
+    { id: 99, title: "Go Dev", company: "Corp", location: "",
+      status: "not_applied", url: "https://example.com", is_manual: false,
+      adjusted_score: null, best_score: null, provider: null }
+  ]});
+  const link = document.getElementById("jobs-list").querySelector("a.job-item");
+  assertContains(link.href, "/job/99");
+});
+
+test("shows empty state when no jobs and no filter", () => {
+  makeJobsDOM();
+  renderJobs({ total: 0, jobs: [] });
+  assertNotClass(document.getElementById("empty-state"), "hidden");
+});
+
+test("shows no-results when filter active but no matches", () => {
+  makeJobsDOM();
+  document.getElementById("filter-search").value = "xyz";
+  renderJobs({ total: 0, jobs: [] });
+  assertNotClass(document.getElementById("no-results"), "hidden");
+  document.getElementById("filter-search").value = "";
+});
+
+test("renders score badge when score exists", () => {
+  makeJobsDOM();
+  renderJobs({ total: 1, jobs: [
+    { id: 1, title: "Dev", company: "", location: "", status: "not_applied",
+      url: "https://x.com", is_manual: false, adjusted_score: 5, best_score: 5, provider: "anthropic" }
+  ]});
+  const html = document.getElementById("jobs-list").innerHTML;
+  assertContains(html, "score-5");
+});
+
+test("renders manual tag for manual jobs", () => {
+  makeJobsDOM();
+  renderJobs({ total: 1, jobs: [
+    { id: 2, title: "Pasted", company: "", location: "", status: "not_applied",
+      url: "manual://abc123", is_manual: true, adjusted_score: null, best_score: null, provider: null }
+  ]});
+  const html = document.getElementById("jobs-list").innerHTML;
+  assertContains(html, "manual");
+});
+
+test("skips malformed jobs gracefully", () => {
+  makeJobsDOM();
+  // null job mixed in — should not throw
+  renderJobs({ total: 2, jobs: [
+    null,
+    { id: 3, title: "Good Job", company: "", location: "", status: "not_applied",
+      url: "https://x.com", is_manual: false, adjusted_score: 3, best_score: 3, provider: "ollama" }
+  ]});
+  const links = document.getElementById("jobs-list").querySelectorAll("a.job-item");
+  assertEqual(links.length, 1);
+});
+
+
+// ── renderPagination ──────────────────────────────────────────────────────────
+
+section("renderPagination");
+
+function makePagDOM() {
+  document.getElementById("pagination-bar").style.display = "none";
+  document.getElementById("pagination-info").textContent = "";
+  document.getElementById("page-indicator").textContent  = "";
+  document.getElementById("prev-btn").disabled = false;
+  document.getElementById("next-btn").disabled = false;
+  // reset _perPage to non-zero so single-page hides bar
+  _perPage = 25;
+}
+
+test("shows pagination bar when total > 0 and multiple pages", () => {
+  makePagDOM();
+  _perPage = 5;
+  renderPagination({ page: 1, total_pages: 3, total: 15, per_page: 5 });
+  assertEqual(document.getElementById("pagination-bar").style.display, "flex");
+});
+
+test("hides pagination bar when single page", () => {
+  makePagDOM();
+  _perPage = 25;
+  renderPagination({ page: 1, total_pages: 1, total: 5, per_page: 25 });
+  assertEqual(document.getElementById("pagination-bar").style.display, "none");
+});
+
+test("disables prev button on first page", () => {
+  makePagDOM();
+  _perPage = 5;
+  renderPagination({ page: 1, total_pages: 3, total: 15, per_page: 5 });
+  assertEqual(document.getElementById("prev-btn").disabled, true);
+});
+
+test("disables next button on last page", () => {
+  makePagDOM();
+  _perPage = 5;
+  renderPagination({ page: 3, total_pages: 3, total: 15, per_page: 5 });
+  assertEqual(document.getElementById("next-btn").disabled, true);
+});
+
+test("enables prev button on page 2+", () => {
+  makePagDOM();
+  _perPage = 5;
+  renderPagination({ page: 2, total_pages: 3, total: 15, per_page: 5 });
+  assertEqual(document.getElementById("prev-btn").disabled, false);
+});
+
+test("pagination info shows correct range", () => {
+  makePagDOM();
+  _perPage = 5;
+  renderPagination({ page: 2, total_pages: 3, total: 15, per_page: 5 });
+  const info = document.getElementById("pagination-info").textContent;
+  assertContains(info, "6");
+  assertContains(info, "10");
+  assertContains(info, "15");
+});
+
+test("page indicator shows page of total", () => {
+  makePagDOM();
+  _perPage = 5;
+  renderPagination({ page: 2, total_pages: 3, total: 15, per_page: 5 });
+  const indicator = document.getElementById("page-indicator").textContent;
+  assertContains(indicator, "2");
+  assertContains(indicator, "3");
+});
+
+
+// ── saveFilterState ───────────────────────────────────────────────────────────
+
+section("saveFilterState");
+
+test("saves state to sessionStorage", () => {
+  document.getElementById("filter-search").value   = "python";
+  document.getElementById("filter-status").value   = "applied";
+  document.getElementById("filter-score").value    = "4";
+  document.getElementById("filter-provider").value = "anthropic";
+  _currentPage = 2;
+  _perPage     = 10;
+
+  saveFilterState();
+
+  const saved = JSON.parse(sessionStorage.getItem("jobFilterState"));
+  assertEqual(saved.search,   "python");
+  assertEqual(saved.status,   "applied");
+  assertEqual(saved.score,    "4");
+  assertEqual(saved.provider, "anthropic");
+  assertEqual(saved.page,     2);
+  assertEqual(saved.per_page, 10);
+
+  // cleanup
+  document.getElementById("filter-search").value   = "";
+  document.getElementById("filter-status").value   = "";
+  document.getElementById("filter-score").value    = "";
+  document.getElementById("filter-provider").value = "";
+  sessionStorage.removeItem("jobFilterState");
+});
+
+
+// ── clearFilters ──────────────────────────────────────────────────────────────
+
+section("clearFilters");
+
+test("clears all filter inputs", () => {
+  document.getElementById("filter-search").value   = "python";
+  document.getElementById("filter-status").value   = "applied";
+  document.getElementById("filter-score").value    = "3";
+  document.getElementById("filter-provider").value = "ollama";
+
+  // stub fetchJobs to avoid real fetch
+  const origFetch = window.fetch;
+  window.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ total: 0, jobs: [], total_pages: 1, page: 1, per_page: 25 }) });
+
+  clearFilters();
+
+  window.fetch = origFetch;
+
+  assertEqual(document.getElementById("filter-search").value,   "");
+  assertEqual(document.getElementById("filter-status").value,   "");
+  assertEqual(document.getElementById("filter-score").value,    "");
+  assertEqual(document.getElementById("filter-provider").value, "");
+});
+
+
+// ── showLoading ───────────────────────────────────────────────────────────────
+
+section("showLoading");
+
+test("shows loading indicator", () => {
+  const loading = document.getElementById("jobs-loading");
+  loading.style.display = "none";
+  showLoading(true);
+  assertEqual(loading.style.display, "block");
+});
+
+test("hides loading indicator", () => {
+  const loading = document.getElementById("jobs-loading");
+  loading.style.display = "block";
+  showLoading(false);
+  assertEqual(loading.style.display, "none");
+});
+
+test("hides error box when loading starts", () => {
+  const errBox = document.getElementById("jobs-error");
+  errBox.classList.remove("hidden");
+  showLoading(true);
+  assertClass(errBox, "hidden");
+});
+
+test("clears jobs list when loading starts", () => {
+  const list = document.getElementById("jobs-list");
+  list.innerHTML = "<div>old content</div>";
+  showLoading(true);
+  assertEqual(list.innerHTML, "");
+});
+
+
+// ── log / logErr ──────────────────────────────────────────────────────────────
+
+section("log / logErr");
+
+test("log does not throw", () => {
+  log("test", "some message", { extra: 1 });
+});
+
+test("logErr does not throw", () => {
+  logErr("test", "some error", new Error("oops"));
+});
+
+
+// ── Summary ───────────────────────────────────────────────────────────────────
+
+const total = _passed + _failed;
+const summaryMsg = `${total} tests — ${_passed} passed, ${_failed} failed`;
+console.log(`\n${summaryMsg}`);
+
+// Render results to page
+document.body.insertAdjacentHTML("afterbegin", `
+  <h1>app.js — Unit Tests</h1>
+  <div id="results"></div>
+  <div class="summary ${_failed === 0 ? 'ok' : 'ko'}">${summaryMsg}</div>
+  <hr style="border-color:#333;margin:16px 0">
+`);
+
+const resultsEl = document.getElementById("results");
+output.forEach(item => {
+  if (item.type === "section") {
+    resultsEl.insertAdjacentHTML("beforeend", `<div class="section">── ${item.name}</div>`);
+  } else if (item.type === "pass") {
+    resultsEl.insertAdjacentHTML("beforeend", `<div class="pass">  ✓ ${item.name}</div>`);
+  } else {
+    resultsEl.insertAdjacentHTML("beforeend", `<div class="fail">  ✗ ${item.name} — ${item.msg}</div>`);
+  }
+});
+</script>
+</body>
+</html>

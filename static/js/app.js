@@ -1,17 +1,11 @@
-// =============================================== //
-// == Script loaded ============================== //
-// =============================================== //
-console.log("[app.js] Script loaded v1");
+// ── Logging helpers ───────────────────────────────────────────────────────────
 
-// =============================================== //
-// == Logging helpers ============================ //
-// =============================================== //
 function log(fn, msg, ...args)    { console.log(`[${fn}]`, msg, ...args); }
 function logErr(fn, msg, ...args) { console.error(`[${fn}] ERROR:`, msg, ...args); }
 
-// =============================================== //
-// == Toast ====================================== //
-// =============================================== //
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+
 let toastTimer;
 function toast(msg, type = "info") {
   log("toast", type, msg);
@@ -23,9 +17,9 @@ function toast(msg, type = "info") {
   toastTimer = setTimeout(() => { el.className = ""; }, 3500);
 }
 
-// =============================================== //
-// == Tabs ======================================= //
-// =============================================== //
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+
 function initTabs() {
   log("initTabs", `found ${document.querySelectorAll(".tabs").length} tab bar(s)`);
   document.querySelectorAll(".tabs").forEach(tabBar => {
@@ -43,9 +37,9 @@ function initTabs() {
   });
 }
 
-// =============================================== //
-// == Score meter ================================ //
-// =============================================== //
+
+// ── Score meter ───────────────────────────────────────────────────────────────
+
 function renderMeter(score, container) {
   container.innerHTML = "";
   for (let i = 1; i <= 5; i++) {
@@ -55,9 +49,9 @@ function renderMeter(score, container) {
   }
 }
 
-// =============================================== //
-// == Add Mode Toggle ============================ //
-// =============================================== //
+
+// ── Add mode toggle ───────────────────────────────────────────────────────────
+
 function initAddModeToggle() {
   log("initAddModeToggle", "init");
   const radios = document.querySelectorAll('input[name="add-mode"]');
@@ -77,15 +71,15 @@ function initAddModeToggle() {
   });
 }
 
-// =============================================== //
-// == Add Job by URL ============================= //
-// =============================================== //
+
+// ── Add job by URL ────────────────────────────────────────────────────────────
+
 async function addJob(e) {
   e.preventDefault();
-  const form = e.target;
-  const btn = form.querySelector("[type=submit]");
+  const form  = e.target;
+  const btn   = form.querySelector("[type=submit]");
   const input = form.querySelector("input[name=url]");
-  const url = input.value.trim();
+  const url   = input.value.trim();
   log("addJob", `url="${url}"`);
   if (!url) { toast("Please enter a URL", "error"); return; }
 
@@ -97,7 +91,7 @@ async function addJob(e) {
 
   try {
     log("addJob", "POST /api/jobs/add");
-    const res = await fetch("/api/jobs/add", { method: "POST", body: fd });
+    const res  = await fetch("/api/jobs/add", { method: "POST", body: fd });
     const data = await res.json();
     log("addJob", `response status=${res.status}`, data);
 
@@ -125,9 +119,9 @@ async function addJob(e) {
   }
 }
 
-// =============================================== //
-// == Add Job by Paste =========================== //
-// =============================================== //
+
+// ── Add job by paste ──────────────────────────────────────────────────────────
+
 async function addJobManual() {
   log("addJobManual", "called");
   const title       = document.getElementById("paste-title").value.trim();
@@ -167,8 +161,8 @@ async function addJobManual() {
 
     log("addJobManual", `success id=${data.job_id}`);
     toast(`✓ Added: ${data.title}`, "success");
-    document.getElementById("paste-title").value = "";
-    document.getElementById("paste-company").value = "";
+    document.getElementById("paste-title").value       = "";
+    document.getElementById("paste-company").value     = "";
     document.getElementById("paste-description").value = "";
     btn.disabled = false; btn.textContent = "Add Job";
     setTimeout(() => location.reload(), 800);
@@ -179,12 +173,8 @@ async function addJobManual() {
   }
 }
 
-// =============================================== //
-// == Analyze Job ================================ //
-// =============================================== //
-// =============================================== //
-// == Progress Bar =============================== //
-// =============================================== //
+
+// ── Analysis progress bar ─────────────────────────────────────────────────────
 
 const MODE_ESTIMATES = { fast: 30, standard: 90, detailed: 240 };
 let _progressTimer = null;
@@ -227,6 +217,9 @@ function formatElapsed(seconds) {
   return m > 0 ? `${m}:${s.toString().padStart(2, '0')}` : `${s}s`;
 }
 
+
+// ── Analyze job ───────────────────────────────────────────────────────────────
+
 async function analyzeJob(jobId) {
   log('analyzeJob', `jobId=${jobId}`);
   const resumeSelect  = document.getElementById('analyze-resume');
@@ -237,15 +230,11 @@ async function analyzeJob(jobId) {
     toast('Please select a resume first', 'error'); return;
   }
 
-  const provider = providerInput ? providerInput.value : 'anthropic';
-
-  // Build model label from provider selection
+  const provider    = providerInput ? providerInput.value : 'anthropic';
   const ollamaLabel = document.querySelector('label[for="p-ollama"]');
-  const model = provider === 'ollama'
+  const model       = provider === 'ollama'
     ? (ollamaLabel ? ollamaLabel.textContent.trim() : 'Ollama')
     : 'claude-opus-4-5';
-
-  // Get analysis mode from server-rendered data attribute
   const mode = btn ? (btn.dataset.mode || 'standard') : 'standard';
 
   btn.disabled    = true;
@@ -280,27 +269,27 @@ async function analyzeJob(jobId) {
   }
 }
 
-// =============================================== //
-// == Save Application =========================== //
-// =============================================== //
+
+// ── Save application ──────────────────────────────────────────────────────────
+
 async function saveApplication(jobId) {
   log("saveApplication", `jobId=${jobId}`);
-  const status   = document.getElementById("app-status").value;
-  const name     = document.getElementById("recruiter-name").value;
-  const email    = document.getElementById("recruiter-email").value;
-  const phone    = document.getElementById("recruiter-phone").value;
-  const notes    = document.getElementById("app-notes").value;
-  const btn      = document.getElementById("save-app-btn");
+  const status = document.getElementById("app-status").value;
+  const name   = document.getElementById("recruiter-name").value;
+  const email  = document.getElementById("recruiter-email").value;
+  const phone  = document.getElementById("recruiter-phone").value;
+  const notes  = document.getElementById("app-notes").value;
+  const btn    = document.getElementById("save-app-btn");
 
-  btn.disabled = true;
+  btn.disabled  = true;
   btn.innerHTML = '<span class="spinner"></span>';
 
   const fd = new FormData();
-  fd.append("status", status);
-  fd.append("recruiter_name", name);
+  fd.append("status",          status);
+  fd.append("recruiter_name",  name);
   fd.append("recruiter_email", email);
   fd.append("recruiter_phone", phone);
-  fd.append("notes", notes);
+  fd.append("notes",           notes);
 
   try {
     log("saveApplication", `POST /api/jobs/${jobId}/application`);
@@ -308,26 +297,26 @@ async function saveApplication(jobId) {
     log("saveApplication", `response status=${res.status}`);
     if (res.ok) {
       toast("Application info saved", "success");
-      // Update status badge inline
       const badge = document.getElementById("status-badge");
       if (badge) {
-        badge.className = `status-badge status-${status}`;
+        badge.className   = `status-badge status-${status}`;
         badge.textContent = status.replace("_", " ");
       }
     } else {
-      logErr("saveApplication", `server error ${res.status}`);
+      logErr("saveApplication", `server error ${res.status} for job=${jobId}`);
       toast("Save failed", "error");
     }
   } catch(err) {
     logErr("saveApplication", "fetch threw:", err);
     toast("Network error", "error");
   }
-  btn.disabled = false; btn.innerHTML = "Save";
+  btn.disabled  = false;
+  btn.innerHTML = "Save";
 }
 
-// =============================================== //
-// == Delete Analysis ============================ //
-// =============================================== //
+
+// ── Delete analysis / job ─────────────────────────────────────────────────────
+
 async function deleteAnalysis(analysisId) {
   if (!confirm("Remove this analysis?")) return;
   log("deleteAnalysis", `id=${analysisId}`);
@@ -335,43 +324,63 @@ async function deleteAnalysis(analysisId) {
     const res = await fetch(`/api/analyses/${analysisId}`, { method: "DELETE" });
     log("deleteAnalysis", `response status=${res.status}`);
     if (res.ok) {
-    const block = document.getElementById(`analysis-${analysisId}`);
-    if (block) block.remove();
-    toast("Analysis removed", "info");
-  } else {
-      logErr("deleteAnalysis", `server error ${res.status}`);
+      const block = document.getElementById(`analysis-${analysisId}`);
+      if (block) block.remove();
+      toast("Analysis removed", "info");
+    } else {
+      logErr("deleteAnalysis", `server error ${res.status} for id=${analysisId}`);
       toast("Delete failed", "error");
     }
-  } catch(err) { logErr("deleteAnalysis", "fetch threw:", err); toast("Network error", "error"); }
+  } catch(err) {
+    logErr("deleteAnalysis", "fetch threw:", err);
+    toast("Network error", "error");
+  }
 }
+
 async function deleteJob(jobId) {
   if (!confirm("Delete this job and all its analyses?")) return;
   log("deleteJob", `id=${jobId}`);
   try {
     const res = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
     log("deleteJob", `response status=${res.status}`);
-    if (res.ok) { toast("Job deleted", "info"); setTimeout(() => location.href = "/", 600); }
-  else { logErr("deleteJob", `server error ${res.status}`); toast("Delete failed", "error"); }
-  } catch(err) { logErr("deleteJob", "fetch threw:", err); toast("Network error", "error"); }
+    if (res.ok) {
+      toast("Job deleted", "info");
+      setTimeout(() => location.href = "/", 600);
+    } else {
+      logErr("deleteJob", `server error ${res.status} for id=${jobId}`);
+      toast("Delete failed", "error");
+    }
+  } catch(err) {
+    logErr("deleteJob", "fetch threw:", err);
+    toast("Network error", "error");
+  }
 }
 
-// =============================================== //
-// == Delete Resume ============================== //
-// =============================================== //
+
+// ── Delete resume ─────────────────────────────────────────────────────────────
+
 async function deleteResume(resumeId) {
   if (!confirm("Delete this resume version?")) return;
   log("deleteResume", `id=${resumeId}`);
   try {
     const res = await fetch(`/api/resumes/${resumeId}`, { method: "DELETE" });
     log("deleteResume", `response status=${res.status}`);
-    if (res.ok) { toast("Resume deleted", "info"); setTimeout(() => location.reload(), 600); }
-  else { logErr("deleteResume", `server error ${res.status}`); toast("Delete failed", "error"); }
-  } catch(err) { logErr("deleteResume", "fetch threw:", err); toast("Network error", "error"); }
+    if (res.ok) {
+      toast("Resume deleted", "info");
+      setTimeout(() => location.reload(), 600);
+    } else {
+      logErr("deleteResume", `server error ${res.status} for id=${resumeId}`);
+      toast("Delete failed", "error");
+    }
+  } catch(err) {
+    logErr("deleteResume", "fetch threw:", err);
+    toast("Network error", "error");
+  }
 }
 
-// =============================================== //
-// == Add Resume ================================= //
-// =============================================== //
+
+// ── Add resume ────────────────────────────────────────────────────────────────
+
 async function addResume(e) {
   if (e) e.preventDefault();
   log("addResume", "called");
@@ -417,9 +426,9 @@ async function addResume(e) {
   }
 }
 
-// =============================================== //
-// == Snippet toggle ============================= //
-// =============================================== //
+
+// ── Snippet toggle ────────────────────────────────────────────────────────────
+
 function toggleSnippets(btn) {
   log('toggleSnippets', 'clicked');
   const container = btn.nextElementSibling;
@@ -429,9 +438,9 @@ function toggleSnippets(btn) {
   btn.innerHTML = isHidden ? '&#9660; evidence' : '&#9658; evidence';
 }
 
-// =============================================== //
-// == Toggle description ========================= //
-// =============================================== //
+
+// ── Toggle description ────────────────────────────────────────────────────────
+
 async function toggleDesc(jobId) {
   log("toggleDesc", `jobId=${jobId}`);
   const box = document.getElementById("desc-box");
@@ -441,12 +450,15 @@ async function toggleDesc(jobId) {
       box.textContent = "Loading…";
       log("toggleDesc", `fetching description for job=${jobId}`);
       try {
-        const res = await fetch(`/api/jobs/${jobId}/description`);
+        const res  = await fetch(`/api/jobs/${jobId}/description`);
         const data = await res.json();
         log("toggleDesc", `loaded ${data.description?.length || 0} chars`);
-        box.textContent = data.description || "(no description)";
+        box.textContent    = data.description || "(no description)";
         box.dataset.loaded = "1";
-      } catch(err) { logErr("toggleDesc", "fetch threw:", err); box.textContent = "Failed to load description."; }
+      } catch(err) {
+        logErr("toggleDesc", `fetch threw for job=${jobId}:`, err);
+        box.textContent = "Failed to load description.";
+      }
     }
     box.classList.remove("hidden");
   } else {
@@ -454,9 +466,9 @@ async function toggleDesc(jobId) {
   }
 }
 
-// =============================================== //
-// == Init ======================================= //
-// =============================================== //
+
+// ── Init (job detail + resumes pages) ────────────────────────────────────────
+
 document.addEventListener("DOMContentLoaded", () => {
   log("init", "DOMContentLoaded fired");
   initTabs();
@@ -479,17 +491,16 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-// =============================================== //
-// == Search, Filter & Pagination ================ //
-// =============================================== //
+
+// ── Jobs list state ───────────────────────────────────────────────────────────
 
 let _currentPage = 1;
 let _perPage     = 25;
 let _searchTimer = null;
 
-// =============================================== //
-// == Fetch jobs from server ===================== //
-// =============================================== //
+
+// ── Fetch jobs ────────────────────────────────────────────────────────────────
+
 async function fetchJobs() {
   const search   = (document.getElementById('filter-search')   || {value:''}).value.trim();
   const status   = (document.getElementById('filter-status')   || {value:''}).value;
@@ -502,11 +513,9 @@ async function fetchJobs() {
   if (score)    params.set('score',    score);
   if (provider) params.set('provider', provider);
 
-  // Sync URL bar
   const newURL = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
   history.pushState({}, '', newURL);
 
-  // Show/hide clear button
   const clearBtn = document.getElementById('clear-btn');
   if (clearBtn) clearBtn.style.display = (search || status || score || provider) ? 'inline-flex' : 'none';
 
@@ -526,7 +535,7 @@ async function fetchJobs() {
 
     let data;
     try { data = await res.json(); } catch(e) {
-      logErr('fetchJobs', 'failed to parse JSON:', e);
+      logErr('fetchJobs', 'failed to parse JSON response:', e);
       showError('Failed to load jobs: server returned invalid data.');
       return;
     }
@@ -546,10 +555,11 @@ async function fetchJobs() {
   }
 }
 
-// =============================================== //
-// == Render jobs list =========================== //
-// =============================================== //
+
+// ── Render jobs list ──────────────────────────────────────────────────────────
+
 function renderJobs(data) {
+  log('renderJobs', `total=${data.total} jobs=${data.jobs?.length}`);
   showLoading(false);
 
   const list       = document.getElementById('jobs-list');
@@ -586,18 +596,18 @@ function renderJobs(data) {
       ? `<div class="score-badge score-${score}">${score}</div>`
       : `<div class="score-badge score-none">—</div>`;
 
-    const isManual   = job.is_manual || (job.url || '').startsWith('manual://');
+    const isManual    = job.is_manual || (job.url || '').startsWith('manual://');
     const providerTag = isManual
       ? `<span class="provider-tag">manual</span>`
       : (job.provider ? `<span class="provider-tag">${job.provider}</span>` : '');
 
-    const status = job.status || 'not_applied';
+    const status      = job.status || 'not_applied';
     const statusLabel = status.replace(/_/g, ' ');
-    const company  = job.company || '';
-    const location = job.location || '';
-    const sep      = company && location ? ' · ' : '';
-    const meta     = (company + sep + location) ||
-                     (isManual ? 'pasted description' : (job.url || '').substring(0, 60) + '…');
+    const company     = job.company  || '';
+    const location    = job.location || '';
+    const sep         = company && location ? ' · ' : '';
+    const meta        = (company + sep + location) ||
+                        (isManual ? 'pasted description' : (job.url || '').substring(0, 60) + '…');
 
     return `<a href="/job/${job.id}" class="job-item" style="text-decoration:none;">
       <div>${scoreBadge}</div>
@@ -614,18 +624,16 @@ function renderJobs(data) {
 
   renderPagination(data);
 
-  // Save filter state when clicking a job — so Back restores it
   list.querySelectorAll('a.job-item').forEach(link => {
-    link.addEventListener('click', () => {
-      saveFilterState();
-    });
+    link.addEventListener('click', () => { saveFilterState(); });
   });
 }
 
-// =============================================== //
-// == Render pagination ========================== //
-// =============================================== //
+
+// ── Render pagination ─────────────────────────────────────────────────────────
+
 function renderPagination(data) {
+  log('renderPagination', `page=${data.page}/${data.total_pages} total=${data.total}`);
   const pagBar    = document.getElementById('pagination-bar');
   const info      = document.getElementById('pagination-info');
   const indicator = document.getElementById('page-indicator');
@@ -651,10 +659,11 @@ function renderPagination(data) {
   }
 }
 
-// =============================================== //
-// == Helpers ==================================== //
-// =============================================== //
+
+// ── Loading / error states ────────────────────────────────────────────────────
+
 function showLoading(show) {
+  log('showLoading', show);
   const loading = document.getElementById('jobs-loading');
   const list    = document.getElementById('jobs-list');
   const errBox  = document.getElementById('jobs-error');
@@ -687,37 +696,36 @@ function showError(msg) {
 }
 
 function hasActiveFilter() {
-  return ['filter-search','filter-status','filter-score','filter-provider']
+  return ['filter-search', 'filter-status', 'filter-score', 'filter-provider']
     .some(id => { const el = document.getElementById(id); return el && el.value !== ''; });
 }
 
-// =============================================== //
-// == User actions =============================== //
-// =============================================== //
-function applyFilters() { _currentPage = 1; fetchJobs(); }
+
+// ── Filter actions ────────────────────────────────────────────────────────────
+
+function applyFilters()         { _currentPage = 1; fetchJobs(); }
 function applyFiltersDebounced() { clearTimeout(_searchTimer); _searchTimer = setTimeout(applyFilters, 300); }
-function changePage(dir) { _currentPage += dir; fetchJobs(); }
+function changePage(dir)        { _currentPage += dir; fetchJobs(); }
 
 function changePerPage() {
   const sel = document.getElementById('per-page');
-  _perPage = sel ? parseInt(sel.value) : 25;
+  _perPage  = sel ? parseInt(sel.value) : 25;
   _currentPage = 1;
   fetchJobs();
   log('changePerPage', `perPage=${_perPage}`);
 }
 
 function clearFilters() {
-  ['filter-search','filter-status','filter-score','filter-provider'].forEach(id => {
+  ['filter-search', 'filter-status', 'filter-score', 'filter-provider'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
   applyFilters();
 }
 
-// =============================================== //
-// == Restore from URL =========================== //
-// =============================================== //
+
+// ── Filter state persistence ──────────────────────────────────────────────────
+
 function saveFilterState() {
-  // Save current filter state to sessionStorage before navigating away
   const state = {
     search:   (document.getElementById('filter-search')   || {value:''}).value,
     status:   (document.getElementById('filter-status')   || {value:''}).value,
@@ -738,16 +746,13 @@ function restoreFromURL() {
   const rawSearch = window.location.search;
   log('restoreFromURL', 'URL search string:', rawSearch);
 
-  const params = new URLSearchParams(rawSearch);
-
-  // Check if URL has any filter params (not just page/per_page)
+  const params     = new URLSearchParams(rawSearch);
   const hasFilters = params.get('search') || params.get('status') ||
                      params.get('score')  || params.get('provider');
   const hasPageParams = params.get('page') || params.get('per_page');
 
   log('restoreFromURL', 'hasFilters=' + hasFilters + ' hasPageParams=' + hasPageParams);
 
-  // If URL has no filter params, try sessionStorage (back navigation)
   let saved = null;
   if (!hasFilters) {
     try {
@@ -761,7 +766,6 @@ function restoreFromURL() {
     }
   }
 
-  // Set filter dropdowns — from URL first, then sessionStorage
   const getValue = (key) => {
     const fromURL = params.get(key);
     if (fromURL !== null) return fromURL;
@@ -780,7 +784,6 @@ function restoreFromURL() {
   setEl('filter-score',    getValue('score'));
   setEl('filter-provider', getValue('provider'));
 
-  // Restore page and per_page
   if (hasPageParams) {
     _currentPage = parseInt(params.get('page')) || 1;
     const pp = params.get('per_page');
@@ -796,9 +799,9 @@ function restoreFromURL() {
   log('restoreFromURL', 'final: page=' + _currentPage + ' perPage=' + _perPage);
 }
 
-// =============================================== //
-// == Init ======================================= //
-// =============================================== //
+
+// ── Init (jobs list page) ─────────────────────────────────────────────────────
+
 document.addEventListener('DOMContentLoaded', () => {
   const jobsList = document.getElementById('jobs-list');
   if (!jobsList) return; // not on jobs page
@@ -806,7 +809,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchEl = document.getElementById('filter-search');
   if (searchEl) searchEl.addEventListener('input', applyFiltersDebounced);
 
-  ['filter-status','filter-score','filter-provider'].forEach(id => {
+  ['filter-status', 'filter-score', 'filter-provider'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', applyFilters);
   });
@@ -818,9 +821,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
-// =============================================== //
-// == Salary estimation ========================== //
-// =============================================== //
+// ── Salary estimation ─────────────────────────────────────────────────────────
 
 async function estimateSalary(jobId) {
   log('estimateSalary', 'job ' + jobId);
@@ -842,7 +843,7 @@ async function estimateSalary(jobId) {
     toast('Salary estimate saved', 'success');
     setTimeout(() => location.reload(), 800);
   } catch(e) {
-    logErr('estimateSalary', e);
+    logErr('estimateSalary', 'fetch threw:', e);
     toast('Salary estimation failed', 'error');
     if (btn) { btn.disabled = false; btn.innerHTML = '💰 Estimate Salary'; }
   }
@@ -855,7 +856,7 @@ async function clearSalaryEstimate(jobId) {
     await fetch(`/api/jobs/${jobId}/salary-estimate`, { method: 'DELETE' });
     location.reload();
   } catch(e) {
-    logErr('clearSalaryEstimate', e);
+    logErr('clearSalaryEstimate', 'fetch threw:', e);
     location.reload();
   }
 }
@@ -864,18 +865,19 @@ async function rerunSalaryEstimate(jobId) {
   // re-run link — delete then immediately re-estimate
   log('rerunSalaryEstimate', 'job ' + jobId);
 
-  // Show spinner on the re-run button
   const btn = document.querySelector(`button[onclick="rerunSalaryEstimate(${jobId})"]`);
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:middle;"></span> re-running…'; }
 
   try {
     await fetch(`/api/jobs/${jobId}/salary-estimate`, { method: 'DELETE' });
   } catch(e) {
-    logErr('rerunSalaryEstimate', e);
+    logErr('rerunSalaryEstimate', 'DELETE salary-estimate threw:', e);
   }
+
   const provider = document.querySelector('input[name="provider"]:checked')?.value || 'anthropic';
   const fd = new FormData();
   fd.append('provider', provider);
+
   try {
     const res  = await fetch(`/api/jobs/${jobId}/estimate-salary`, { method: 'POST', body: fd });
     const data = await res.json();
@@ -887,7 +889,7 @@ async function rerunSalaryEstimate(jobId) {
       setTimeout(() => location.reload(), 600);
     }
   } catch(e) {
-    logErr('rerunSalaryEstimate', e);
+    logErr('rerunSalaryEstimate', 'POST estimate-salary threw:', e);
     location.reload();
   }
 }
