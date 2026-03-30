@@ -1,0 +1,332 @@
+"""
+tests/test_analyzer.py — Unit tests for analyzer module.
+Covers: response parsing, penalty pipeline, prompt building, LLM callers, dispatch.
+"""
+
+import json
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from tests.mock_data import (
+    run,
+    MOCK_RESUME_DEVSECOPS,
+    MOCK_JOB_DEVSECOPS,
+    MOCK_JOB_MARKETING,
+    MOCK_LLM_RESPONSE_GOOD,
+    MOCK_LLM_RESPONSE_POOR,
+    MOCK_LLM_RESPONSE_WITH_FENCES,
+    MOCK_LLM_RESPONSE_INVALID_SCORE,
+    MOCK_LLM_RESPONSE_NO_JSON,
+)
+
+
+class TestParseResponse(unittest.TestCase):
+    """Tests for analyzer._parse_response — pure function, no mocking needed."""
+
+    def test_valid_json_score_5(self):
+        from analyzer import _parse_response
+        result = _parse_response(MOCK_LLM_RESPONSE_GOOD)
+        self.assertEqual(result["score"], 5)
+        skill_names = [s["skill"] if isinstance(s, dict) else s for s in result["matched_skills"]]
+        self.assertIn("Python", skill_names)
+        skill_names = [s["skill"] for s in result["missing_skills"]]
+        self.assertIn("Active Secret Clearance", skill_names)
+        self.assertIsInstance(result["reasoning"], str)
+        self.assertIn("adjusted_score", result)
+        self.assertIn("penalty_breakdown", result)
+
+    def test_valid_json_score_1(self):
+        from analyzer import _parse_response
+        result = _parse_response(MOCK_LLM_RESPONSE_POOR)
+        self.assertEqual(result["score"], 1)
+        self.assertEqual(result["matched_skills"], [])
+        skill_names = [s["skill"] for s in result["missing_skills"]]
+        self.assertIn("Google Ads", skill_names)
+
+    def test_strips_markdown_code_fences(self):
+        from analyzer import _parse_response
+        result = _parse_response(MOCK_LLM_RESPONSE_WITH_FENCES)
+        self.assertEqual(result["score"], 5)
+
+    def test_raises_on_invalid_score(self):
+        from analyzer import _parse_response
+        with self.assertRaises(ValueError) as ctx:
+            _parse_response(MOCK_LLM_RESPONSE_INVALID_SCORE)
+        self.assertIn("Score out of range", str(ctx.exception))
+
+    def test_raises_on_no_json(self):
+        from analyzer import _parse_response
+        with self.assertRaises(ValueError) as ctx:
+            _parse_response(MOCK_LLM_RESPONSE_NO_JSON)
+        self.assertIn("No JSON object found", str(ctx.exception))
+
+    def test_score_boundaries(self):
+        from analyzer import _parse_response
+        for valid_score in [1, 2, 3, 4, 5]:
+            raw = json.dumps({
+                "score": valid_score,
+                "matched_skills": [],
+                "missing_skills": [],
+                "reasoning": "ok"
+            })
+            result = _parse_response(raw)
+            self.assertEqual(result["score"], valid_score)
+
+    def test_score_0_is_invalid(self):
+        from analyzer import _parse_response
+        raw = json.dumps({"score": 0, "matched_skills": [], "missing_skills": [], "reasoning": "ok"})
+        with self.assertRaises(ValueError):
+            _parse_response(raw)
+
+    def test_score_6_is_invalid(self):
+        from analyzer import _parse_response
+        raw = json.dumps({"score": 6, "matched_skills": [], "missing_skills": [], "reasoning": "ok"})
+        with self.assertRaises(ValueError):
+            _parse_response(raw)
+
+    def test_missing_skills_defaults_to_empty_list(self):
+        from analyzer import _parse_response
+        raw = json.dumps({"score": 3, "matched_skills": ["Python"], "reasoning": "ok"})
+        result = _parse_response(raw)
+        self.assertEqual(result["missing_skills"], [])
+
+    def test_json_embedded_in_prose(self):
+        from analyzer import _parse_response
+        raw = (
+            'Here is my evaluation: '
+            '{"score": 4, "matched_skills": ["Docker"], "missing_skills": [], "reasoning": "Good fit."}'
+            ' Hope that helps!'
+        )
+        result = _parse_response(raw)
+        self.assertEqual(result["score"], 4)
+
+    def test_flat_missing_skills_still_accepted(self):
+        """Old flat string format should still parse without error."""
+        from analyzer import _parse_response
+        raw = json.dumps({
+            "score": 3,
+            "matched_skills": ["Python"],
+            "missing_skills": ["Kubernetes", "Terraform"],
+            "reasoning": "ok"
+        })
+        result = _parse_response(raw)
+        skill_names = [s["skill"] for s in result["missing_skills"]]
+        self.assertIn("Kubernetes", skill_names)
+
+
+class TestPenaltyPipeline(unittest.TestCase):
+    """Tests for the adjusted score penalty pipeline."""
+
+    def test_blocker_reduces_score(self):
+        from analyzer import _compute_adjusted_score
+        missing = [{"skill": "TS/SCI Clearance", "severity": "blocker",
+                    "requirement_type": "hard", "cluster_group": "security"}]
+        adjusted, breakdown = _compute_adjusted_score(4, missing)
+        self.assertLess(adjusted, 4)
+        self.assertEqual(breakdown["blockers"], 1)
+        self.assertEqual(breakdown["clusters"].get("security", 0), 2)
+
+    def test_no_penalty_when_no_gaps(self):
+        from analyzer import _compute_adjusted_score
+        adjusted, breakdown = _compute_adjusted_score(5, [])
+        self.assertEqual(adjusted, 5)
+        self.assertEqual(breakdown["total_penalty"], 0)
+
+    def test_adjusted_score_never_below_1(self):
+        from analyzer import _compute_adjusted_score
+        missing = [
+            {"skill": "Clearance",    "severity": "blocker",
+             "requirement_type": "hard",      "cluster_group": "security"},
+            {"skill": "10 years exp", "severity": "blocker",
+             "requirement_type": "hard",      "cluster_group": "other"},
+            {"skill": "Kubernetes",   "severity": "major",
+             "requirement_type": "preferred", "cluster_group": "devops"},
+        ]
+        adjusted, _ = _compute_adjusted_score(2, missing)
+        self.assertGreaterEqual(adjusted, 1)
+
+    def test_minor_gaps_small_penalty(self):
+        from analyzer import _compute_adjusted_score
+        missing = [{"skill": "Nice-to-have", "severity": "minor",
+                    "requirement_type": "preferred", "cluster_group": "other"}]
+        adjusted, breakdown = _compute_adjusted_score(4, missing)
+        self.assertEqual(breakdown["total_penalty"], 0)
+        self.assertEqual(adjusted, 4)
+
+    def test_two_minors_give_penalty(self):
+        from analyzer import _compute_adjusted_score
+        missing = [
+            {"skill": "A", "severity": "minor",
+             "requirement_type": "preferred", "cluster_group": "other"},
+            {"skill": "B", "severity": "minor",
+             "requirement_type": "preferred", "cluster_group": "frontend"},
+        ]
+        adjusted, breakdown = _compute_adjusted_score(5, missing)
+        self.assertEqual(breakdown["total_penalty"], 0)
+        self.assertEqual(adjusted, 5)
+
+    def test_count_penalty_above_6_gaps(self):
+        from analyzer import _compute_adjusted_score
+        missing = [{"skill": f"skill{i}", "severity": "minor",
+                    "requirement_type": "preferred", "cluster_group": f"cat{i}"}
+                   for i in range(7)]
+        _, breakdown = _compute_adjusted_score(4, missing)
+        self.assertEqual(breakdown["count_penalty"], 0)
+
+    def test_bonus_requirement_zero_penalty(self):
+        from analyzer import penalty_for_skill
+        skill = {"skill": "Kubernetes", "severity": "major", "requirement_type": "bonus"}
+        self.assertEqual(penalty_for_skill(skill), 0)
+
+    def test_hard_blocker_penalty(self):
+        from analyzer import penalty_for_skill
+        skill = {"skill": "Secret Clearance", "severity": "blocker", "requirement_type": "hard"}
+        self.assertEqual(penalty_for_skill(skill), 2)
+
+    def test_preferred_major_penalty(self):
+        from analyzer import penalty_for_skill
+        skill = {"skill": "AWS", "severity": "major", "requirement_type": "preferred"}
+        self.assertEqual(penalty_for_skill(skill), 1)
+
+    def test_cloud_cluster_capped(self):
+        from analyzer import _compute_adjusted_score
+        missing = [
+            {"skill": "AWS",    "severity": "major",
+             "requirement_type": "preferred", "cluster_group": "cloud"},
+            {"skill": "Lambda", "severity": "major",
+             "requirement_type": "preferred", "cluster_group": "cloud"},
+            {"skill": "S3",     "severity": "major",
+             "requirement_type": "preferred", "cluster_group": "cloud"},
+        ]
+        adjusted, breakdown = _compute_adjusted_score(4, missing)
+        self.assertEqual(breakdown["clusters"].get("cloud", 0), 1)
+        self.assertEqual(adjusted, 3)
+
+    def test_keyword_detector_upgrades_clearance(self):
+        from analyzer import _keyword_boost
+        skills = [{"skill": "Active TS/SCI Clearance", "severity": "minor",
+                   "requirement_type": "preferred", "cluster_group": "security"}]
+        result = _keyword_boost(skills, "Must have clearance to apply")
+        self.assertEqual(result[0]["severity"], "blocker")
+
+    def test_keyword_detector_upgrades_years(self):
+        from analyzer import _keyword_boost
+        skills = [{"skill": "7 years experience", "severity": "major",
+                   "requirement_type": "preferred", "cluster_group": "other"}]
+        result = _keyword_boost(skills, "Requires 7+ years of experience")
+        self.assertEqual(result[0]["severity"], "blocker")
+
+
+class TestBuildUserPrompt(unittest.TestCase):
+    def test_prompt_contains_resume_and_jd(self):
+        from analyzer import _build_user_prompt
+        prompt = _build_user_prompt("My Resume", "Job Description Here")
+        self.assertIn("My Resume", prompt)
+        self.assertIn("Job Description Here", prompt)
+        self.assertIn("RESUME", prompt)
+        self.assertIn("JOB DESCRIPTION", prompt)
+
+
+class TestAnalyzeWithAnthropic(unittest.TestCase):
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test-key"})
+    @patch("analyzer.llm.anthropic.Anthropic")
+    def test_returns_parsed_result_with_provider(self, mock_cls):
+        from analyzer import analyze_with_anthropic, ANTHROPIC_MODEL
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=MOCK_LLM_RESPONSE_GOOD)]
+        mock_client.messages.create.return_value = mock_msg
+
+        result = run(analyze_with_anthropic(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+
+        self.assertEqual(result["score"], 5)
+        self.assertEqual(result["llm_provider"], "anthropic")
+        self.assertEqual(result["llm_model"], ANTHROPIC_MODEL)
+        skill_names = [s["skill"] if isinstance(s, dict) else s for s in result["matched_skills"]]
+        self.assertIn("Python", skill_names)
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test-key"})
+    @patch("analyzer.llm.anthropic.Anthropic")
+    def test_calls_correct_model(self, mock_cls):
+        from analyzer import ANTHROPIC_MODEL
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_msg = MagicMock()
+        mock_msg.content = [MagicMock(text=MOCK_LLM_RESPONSE_GOOD)]
+        mock_client.messages.create.return_value = mock_msg
+
+        from analyzer import analyze_with_anthropic
+        run(analyze_with_anthropic("resume", "job"))
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        self.assertEqual(call_kwargs["model"], ANTHROPIC_MODEL)
+
+
+class TestAnalyzeWithOllama(unittest.TestCase):
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_returns_parsed_result_with_provider(self, mock_client_cls):
+        from analyzer import analyze_with_ollama, _ollama_model
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": MOCK_LLM_RESPONSE_POOR}}
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        result = run(analyze_with_ollama(MOCK_RESUME_DEVSECOPS, MOCK_JOB_MARKETING))
+
+        self.assertEqual(result["score"], 1)
+        self.assertEqual(result["llm_provider"], "ollama")
+        self.assertEqual(result["llm_model"], _ollama_model())
+
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_ollama_connection_error(self, mock_client_cls):
+        import httpx
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        from analyzer import analyze_with_ollama
+        with self.assertRaises(ValueError) as ctx:
+            run(analyze_with_ollama("resume", "job"))
+        self.assertIn("Cannot connect to Ollama", str(ctx.exception))
+
+
+class TestAnalyzeMatchDispatch(unittest.TestCase):
+    @patch("analyzer.llm.call_anthropic_once", new_callable=AsyncMock)
+    @patch("analyzer.llm.call_ollama_once", new_callable=AsyncMock)
+    def test_routes_to_anthropic_by_default(self, mock_ollama, mock_anthropic):
+        mock_anthropic.return_value = {
+            "score": 4, "adjusted_score": 4, "llm_provider": "anthropic",
+            "llm_model": "claude-opus-4-5",
+            "matched_skills": [{"skill": "Python", "match_type": "exact",
+                                 "jd_snippet": "Python required",
+                                 "resume_snippet": "Python dev", "category": "backend"}],
+            "missing_skills": [], "reasoning": "Good match",
+            "penalty_breakdown": {}, "suggestions": [],
+        }
+        from analyzer import analyze_match
+        run(analyze_match("resume", "job"))
+        mock_anthropic.assert_called_once()
+        mock_ollama.assert_not_called()
+
+    @patch("analyzer.llm.call_anthropic_once", new_callable=AsyncMock)
+    @patch("analyzer.llm.call_ollama_once", new_callable=AsyncMock)
+    def test_routes_to_ollama_when_specified(self, mock_ollama, mock_anthropic):
+        mock_ollama.return_value = {
+            "score": 3, "adjusted_score": 3, "llm_provider": "ollama",
+            "llm_model": "llama3.1:8b",
+            "matched_skills": [{"skill": "Docker", "match_type": "exact",
+                                 "jd_snippet": "Docker required",
+                                 "resume_snippet": "Used Docker", "category": "devops"}],
+            "missing_skills": [], "reasoning": "Partial match",
+            "penalty_breakdown": {}, "suggestions": [],
+        }
+        from analyzer import analyze_match
+        run(analyze_match("resume", "job", provider="ollama"))
+        mock_ollama.assert_called_once()
+        mock_anthropic.assert_not_called()

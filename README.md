@@ -200,7 +200,7 @@ Press `Ctrl+C` to stop.
 ## Running the Tests
 
 ```bash
-python tests.py
+python run_tests.py
 ```
 
 No API key or network connection required — all external calls are mocked.
