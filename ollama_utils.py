@@ -1,7 +1,10 @@
 # ollama_utils.py
+import logging
 import math
 import os
 import httpx
+
+logger = logging.getLogger("ollama_utils")
 
 # Known context windows as a cache seed — extended with common models.
 # safe_num_predict() will query Ollama for any model not listed here
@@ -86,7 +89,14 @@ def _query_model_context(model_name: str) -> int | None:
                     return int(parts[1])
 
         return None
-    except Exception:
+    except httpx.ConnectError:
+        logger.warning(f"⚠ cannot connect to Ollama at {_ollama_base_url()} — is it running?")
+        return None
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"⚠ Ollama API error querying '{model_name}': {e.response.status_code}")
+        return None
+    except Exception as e:
+        logger.warning(f"⚠ unexpected error querying context window for '{model_name}': {e}")
         return None
 
 
@@ -107,11 +117,11 @@ def get_context_window(model_name: str) -> int:
     queried = _query_model_context(model_name)
     if queried:
         _CONTEXT_CACHE[model_name] = queried
-        print(f"[ollama_utils] ✓ queried context window for '{model_name}': {queried}")
+        logger.info(f"✓ queried context window for '{model_name}': {queried}")
         return queried
 
     # 4. Conservative fallback
-    print(f"[ollama_utils] ⚠ unknown model '{model_name}' — using fallback context {_FALLBACK_CONTEXT}")
+    logger.warning(f"⚠ unknown model '{model_name}' — using fallback context {_FALLBACK_CONTEXT}")
     _CONTEXT_CACHE[model_name] = _FALLBACK_CONTEXT
     return _FALLBACK_CONTEXT
 
@@ -138,7 +148,7 @@ def safe_num_predict(prompt: str, model_name: str, desired_output: int = 4096) -
     max_safe_output = context_window - prompt_tokens
 
     if max_safe_output <= 0:
-        print(f"[ollama_utils] ⚠ prompt ({prompt_tokens} tokens) exceeds context window ({context_window}) for '{model_name}'")
+        logger.warning(f"⚠ prompt ({prompt_tokens} tokens) exceeds context window ({context_window}) for '{model_name}'")
         return desired_output  # let Ollama handle it gracefully
 
     result = min(desired_output, max_safe_output)
