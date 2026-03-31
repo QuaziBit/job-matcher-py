@@ -282,18 +282,14 @@ class TestAnalyzeWithOllama(unittest.TestCase):
         self.assertEqual(result["llm_provider"], "ollama")
         self.assertEqual(result["llm_model"], _ollama_model())
 
-    @patch("analyzer.llm.httpx.AsyncClient")
-    def test_ollama_connection_error(self, mock_client_cls):
-        import httpx
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
-        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
+    @patch("analyzer.llm._call_chunk", new_callable=AsyncMock)
+    def test_ollama_connection_error(self, mock_call_chunk):
+        # Chunked approach — chunk 1 failure raises ValueError about score
+        mock_call_chunk.return_value = None  # simulates connection failure
         from analyzer import analyze_with_ollama
         with self.assertRaises(ValueError) as ctx:
             run(analyze_with_ollama("resume", "job"))
-        self.assertIn("Cannot connect to Ollama", str(ctx.exception))
+        self.assertIn("Chunked analysis failed", str(ctx.exception))
 
 
 class TestAnalyzeMatchDispatch(unittest.TestCase):
@@ -315,9 +311,9 @@ class TestAnalyzeMatchDispatch(unittest.TestCase):
         mock_ollama.assert_not_called()
 
     @patch("analyzer.llm.call_anthropic_once", new_callable=AsyncMock)
-    @patch("analyzer.llm.call_ollama_once", new_callable=AsyncMock)
-    def test_routes_to_ollama_when_specified(self, mock_ollama, mock_anthropic):
-        mock_ollama.return_value = {
+    @patch("analyzer.llm.call_ollama_chunked", new_callable=AsyncMock)
+    def test_routes_to_ollama_when_specified(self, mock_ollama_chunked, mock_anthropic):
+        mock_ollama_chunked.return_value = {
             "score": 3, "adjusted_score": 3, "llm_provider": "ollama",
             "llm_model": "llama3.1:8b",
             "matched_skills": [{"skill": "Docker", "match_type": "exact",
@@ -328,7 +324,7 @@ class TestAnalyzeMatchDispatch(unittest.TestCase):
         }
         from analyzer import analyze_match
         run(analyze_match("resume", "job", provider="ollama"))
-        mock_ollama.assert_called_once()
+        mock_ollama_chunked.assert_called_once()
         mock_anthropic.assert_not_called()
 
 
@@ -491,3 +487,192 @@ class TestBuildSystemPromptModes(unittest.TestCase):
         prompt = self._prompt("detailed")
         self.assertIn("suggestions", prompt)
         self.assertIn("job_requirement", prompt)
+
+
+class TestChunkParsers(unittest.TestCase):
+    """Tests for _parse_score_chunk and _parse_chunk — pure functions."""
+
+    def test_parse_score_valid(self):
+        from analyzer.llm import _parse_score_chunk
+        raw = '{"score": 4, "reasoning": "Good match."}'
+        score, reasoning = _parse_score_chunk(raw)
+        self.assertEqual(score, 4)
+        self.assertEqual(reasoning, "Good match.")
+
+    def test_parse_score_float_rounds(self):
+        from analyzer.llm import _parse_score_chunk
+        # 3.6 → 4 with both round() and int(x+0.5) — avoids banker's rounding edge case
+        raw = '{"score": 3.6, "reasoning": "Strong match."}'
+        score, _ = _parse_score_chunk(raw)
+        self.assertEqual(score, 4)
+
+    def test_parse_score_out_of_range(self):
+        from analyzer.llm import _parse_score_chunk
+        raw = '{"score": 7, "reasoning": "Great."}'
+        score, reasoning = _parse_score_chunk(raw)
+        self.assertIsNone(score)
+
+    def test_parse_score_none_input(self):
+        from analyzer.llm import _parse_score_chunk
+        score, reasoning = _parse_score_chunk(None)
+        self.assertIsNone(score)
+        self.assertEqual(reasoning, "")
+
+    def test_parse_score_strips_markdown_fences(self):
+        from analyzer.llm import _parse_score_chunk
+        raw = '```json\n{"score": 3, "reasoning": "Moderate."}\n```'
+        score, reasoning = _parse_score_chunk(raw)
+        self.assertEqual(score, 3)
+        self.assertEqual(reasoning, "Moderate.")
+
+    def test_parse_chunk_extracts_key(self):
+        from analyzer.llm import _parse_chunk
+        raw = '{"matched_skills": [{"skill": "Python", "match_type": "exact"}]}'
+        result = _parse_chunk(raw, "matched_skills", "test")
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["skill"], "Python")
+
+    def test_parse_chunk_missing_key(self):
+        from analyzer.llm import _parse_chunk
+        raw = '{"wrong_key": []}'
+        result = _parse_chunk(raw, "matched_skills", "test")
+        self.assertIsNone(result)
+
+    def test_parse_chunk_none_input(self):
+        from analyzer.llm import _parse_chunk
+        result = _parse_chunk(None, "matched_skills", "test")
+        self.assertIsNone(result)
+
+    def test_parse_chunk_invalid_json(self):
+        from analyzer.llm import _parse_chunk
+        result = _parse_chunk("not json at all", "matched_skills", "test")
+        self.assertIsNone(result)
+
+
+class TestChunkPrompts(unittest.TestCase):
+    """Tests for chunk prompt builders."""
+
+    def _cfg(self, mode):
+        from analyzer.config import MODE_CONFIG
+        return MODE_CONFIG[mode]
+
+    def test_chunk1_has_score_and_reasoning(self):
+        from analyzer.prompts import build_chunk1_prompt
+        prompt = build_chunk1_prompt(self._cfg("standard"), "standard")
+        self.assertIn("score", prompt)
+        self.assertIn("reasoning", prompt)
+        self.assertNotIn("matched_skills", prompt)
+        self.assertNotIn("missing_skills", prompt)
+
+    def test_chunk2_has_matched_skills(self):
+        from analyzer.prompts import build_chunk2_prompt
+        prompt = build_chunk2_prompt(self._cfg("standard"), "standard")
+        self.assertIn("matched_skills", prompt)
+        self.assertNotIn("missing_skills", prompt)
+        self.assertNotIn("reasoning", prompt)
+
+    def test_chunk3_has_missing_skills(self):
+        from analyzer.prompts import build_chunk3_prompt
+        prompt = build_chunk3_prompt(self._cfg("standard"), "standard")
+        self.assertIn("missing_skills", prompt)
+        self.assertNotIn("matched_skills", prompt)
+        self.assertNotIn("reasoning", prompt)
+
+    def test_chunk4_has_suggestions(self):
+        from analyzer.prompts import build_chunk4_prompt
+        prompt = build_chunk4_prompt(self._cfg("detailed"))
+        self.assertIn("suggestions", prompt)
+        self.assertIn("title", prompt)
+        self.assertIn("detail", prompt)
+
+    def test_chunk2_fast_has_no_snippets(self):
+        from analyzer.prompts import build_chunk2_prompt
+        prompt = build_chunk2_prompt(self._cfg("fast"), "fast")
+        self.assertNotIn("jd_snippet", prompt)
+        self.assertIn("4 words", prompt)
+
+    def test_chunk2_standard_has_jd_snippet(self):
+        from analyzer.prompts import build_chunk2_prompt
+        prompt = build_chunk2_prompt(self._cfg("standard"), "standard")
+        self.assertIn("jd_snippet", prompt)
+
+    def test_chunk3_standard_has_severity(self):
+        from analyzer.prompts import build_chunk3_prompt
+        prompt = build_chunk3_prompt(self._cfg("standard"), "standard")
+        self.assertIn("blocker", prompt)
+        self.assertIn("major", prompt)
+        self.assertIn("minor", prompt)
+
+
+class TestCallOllamaChunked(unittest.TestCase):
+    """Tests for call_ollama_chunked — mocks _call_chunk."""
+
+    def _make_chunk_response(self, data: dict) -> str:
+        import json
+        return json.dumps(data)
+
+    @patch("analyzer.llm._call_chunk", new_callable=AsyncMock)
+    def test_successful_standard_analysis(self, mock_call_chunk):
+        """All 3 chunks succeed — result has all fields populated."""
+        import json
+        mock_call_chunk.side_effect = [
+            json.dumps({"score": 4, "reasoning": "Strong match."}),
+            json.dumps({"matched_skills": [
+                {"skill": "Python", "match_type": "exact", "jd_snippet": "Python required"}
+            ]}),
+            json.dumps({"missing_skills": [
+                {"skill": "AWS Lambda", "severity": "major",
+                 "requirement_type": "preferred", "jd_snippet": "Lambda required"}
+            ]}),
+        ]
+        from analyzer.llm import call_ollama_chunked
+        result = run(call_ollama_chunked(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertEqual(result["score"], 4)
+        self.assertEqual(result["reasoning"], "Strong match.")
+        self.assertGreater(len(result["matched_skills"]), 0)
+        self.assertGreater(len(result["missing_skills"]), 0)
+        self.assertEqual(result["llm_provider"], "ollama")
+
+    @patch("analyzer.llm._call_chunk", new_callable=AsyncMock)
+    def test_chunk1_failure_raises(self, mock_call_chunk):
+        """If chunk 1 fails, ValueError is raised."""
+        mock_call_chunk.return_value = None  # simulate connection failure
+        from analyzer.llm import call_ollama_chunked
+        with self.assertRaises(ValueError) as ctx:
+            run(call_ollama_chunked(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertIn("score", str(ctx.exception))
+
+    @patch("analyzer.llm._call_chunk", new_callable=AsyncMock)
+    def test_chunk2_failure_returns_empty_matched(self, mock_call_chunk):
+        """If chunk 2 fails, matched_skills is empty but result still valid."""
+        import json
+        mock_call_chunk.side_effect = [
+            json.dumps({"score": 3, "reasoning": "Moderate match."}),
+            None,  # chunk 2 fails
+            json.dumps({"missing_skills": [
+                {"skill": "Docker", "severity": "minor",
+                 "requirement_type": "preferred", "jd_snippet": "Docker preferred"}
+            ]}),
+        ]
+        from analyzer.llm import call_ollama_chunked
+        result = run(call_ollama_chunked(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertEqual(result["score"], 3)
+        self.assertEqual(result["matched_skills"], [])
+        self.assertGreater(len(result["missing_skills"]), 0)
+
+    @patch("analyzer.llm._call_chunk", new_callable=AsyncMock)
+    def test_routes_ollama_to_chunked(self, mock_call_chunk):
+        """analyze_match with ollama provider calls call_ollama_chunked."""
+        import json
+        mock_call_chunk.side_effect = [
+            json.dumps({"score": 4, "reasoning": "Good."}),
+            json.dumps({"matched_skills": [{"skill": "Python", "match_type": "exact", "jd_snippet": ""}]}),
+            json.dumps({"missing_skills": []}),
+        ]
+        from analyzer import analyze_match
+        result = run(analyze_match(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS, provider="ollama"))
+        self.assertEqual(result["llm_provider"], "ollama")
+        self.assertEqual(result["score"], 4)
+        # _call_chunk should have been called (at least chunks 1-3)
+        self.assertGreaterEqual(mock_call_chunk.call_count, 3)
