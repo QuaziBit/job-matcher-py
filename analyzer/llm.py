@@ -9,8 +9,9 @@ import anthropic
 import httpx
 
 from analyzer.config import (
-    ANTHROPIC_MODEL, MAX_RETRIES,
+    ANTHROPIC_MODEL, MAX_RETRIES, MODE_CONFIG,
     get_mode_config, ollama_base_url, ollama_model,
+    cap_mode_for_model,
 )
 from analyzer.parsers import parse_response
 from ollama_utils import safe_num_predict, estimate_tokens, get_context_window
@@ -46,19 +47,38 @@ async def call_anthropic_once(resume: str, job_description: str) -> dict:
     return result
 
 
-async def call_ollama_once(resume: str, job_description: str) -> dict:
+async def call_ollama_once(resume: str, job_description: str, resume_snippet: bool = True) -> dict:
     cfg   = get_mode_config()
     model = ollama_model()
 
     # Pre-flight: if the combined prompt is too large for the model's context
     # window, trim the job description so the model has enough room to respond.
     # Target: leave at least desired_output + 512 headroom tokens for the response.
-    system_prompt  = build_system_prompt(cfg)
+    system_prompt  = build_system_prompt(cfg, resume_snippet=resume_snippet)  # rebuilt below if mode is capped
     context_window = get_context_window(model)
     desired_output = cfg["num_predict"]
     MIN_OUTPUT     = int(desired_output * 0.80)  # require at least 80% of desired output tokens
 
-    actual_mode   = os.getenv("ANALYSIS_MODE", "standard").lower()  # may be updated if mode is downgraded
+    requested_mode = os.getenv("ANALYSIS_MODE", "standard").lower()
+    actual_mode    = cap_mode_for_model(requested_mode, model)
+
+    if actual_mode != requested_mode:
+        logger.warning(
+            f"⚠ {model} max mode is '{actual_mode}' — "
+            f"downgrading from '{requested_mode}' to '{actual_mode}'"
+        )
+        cfg            = MODE_CONFIG[actual_mode]
+        desired_output = cfg["num_predict"]
+        MIN_OUTPUT     = int(desired_output * 0.80)
+        system_prompt  = build_system_prompt(cfg, mode=actual_mode, resume_snippet=resume_snippet)
+
+    logger.info(
+        f"→ mode={actual_mode} model={model} "
+        f"num_predict={cfg['num_predict']} "
+        f"max_matched={cfg['max_matched']} max_missing={cfg['max_missing']} "
+        f"suggestions={cfg['suggestions']}"
+    )
+
     full_prompt   = system_prompt + build_user_prompt(resume, job_description)
     prompt_tokens = int(estimate_tokens(full_prompt) * 1.20)  # 20% buffer
 
@@ -78,23 +98,21 @@ async def call_ollama_once(resume: str, job_description: str) -> dict:
         original_jd_len  = len(job_description)
 
         # First try: downgrade mode to reduce desired_output before trimming JD
-        current_mode = os.getenv("ANALYSIS_MODE", "standard").lower()
         fallback_modes = {"detailed": ("standard", 1800), "standard": ("fast", 800)}
-        if current_mode in fallback_modes:
-            downgraded_mode, downgraded_output = fallback_modes[current_mode]
+        if actual_mode in fallback_modes:
+            downgraded_mode, downgraded_output = fallback_modes[actual_mode]
             downgraded_available = context_window - overhead_buf - downgraded_output - 512
             if downgraded_available >= int(downgraded_output * 0.80):
                 logger.warning(
-                    f"⚠ prompt too large for {model} in {current_mode} mode "
+                    f"⚠ prompt too large for {model} in {actual_mode} mode "
                     f"(available={available_for_output} < min={MIN_OUTPUT}) — "
                     f"downgrading to {downgraded_mode} mode "
                     f"(desired_output {desired_output} → {downgraded_output})"
                 )
-                from analyzer.config import MODE_CONFIG
                 cfg            = MODE_CONFIG[downgraded_mode]
                 desired_output = downgraded_output
                 MIN_OUTPUT     = int(desired_output * 0.80)
-                system_prompt  = build_system_prompt(cfg)
+                system_prompt  = build_system_prompt(cfg, mode=downgraded_mode, resume_snippet=resume_snippet)
                 full_prompt    = system_prompt + build_user_prompt(resume, job_description)
                 prompt_tokens  = int(estimate_tokens(full_prompt) * 1.20)
                 available_for_output = context_window - prompt_tokens - 512
@@ -146,10 +164,11 @@ async def call_ollama_once(resume: str, job_description: str) -> dict:
     # Log token usage from Ollama response if available
     eval_count   = resp_json.get("eval_count", "?")
     prompt_eval  = resp_json.get("prompt_eval_count", "?")
-    logger.debug(
+    logger.info(
         f"→ raw Ollama response ({len(raw)} chars) "
-        f"prompt_tokens={prompt_eval} output_tokens={eval_count}:\n{raw[:2000]}"
+        f"prompt_tokens={prompt_eval} output_tokens={eval_count}"
     )
+    logger.debug(f"→ raw Ollama response body:\n{raw[:2000]}")
 
     result = parse_response(raw, job_description, cfg)
     result["llm_provider"]  = "ollama"
@@ -183,7 +202,15 @@ async def analyze_match(resume: str, job_description: str, provider: str = "anth
             )
             import analyzer.llm as _self
             if provider == "ollama":
-                result = await _self.call_ollama_once(resume, job_description)
+                # On retry in standard mode, drop resume_snippet to reduce
+                # output complexity for models that struggled on attempt 1.
+                # Detailed mode always keeps resume_snippet — it's core to the schema.
+                current_mode = os.getenv("ANALYSIS_MODE", "standard").lower()
+                use_resume_snippet = (attempt == 0) or (current_mode != "standard")
+                if not use_resume_snippet:
+                    logger.info("→ retry: dropping resume_snippet from standard mode prompt")
+                result = await _self.call_ollama_once(resume, job_description,
+                                                      resume_snippet=use_resume_snippet)
             else:
                 result = await _self.call_anthropic_once(resume, job_description)
         except Exception as e:
@@ -199,6 +226,10 @@ async def analyze_match(resume: str, job_description: str, provider: str = "anth
             return result
 
         logger.error(f"✗ LLM output validation failed: {last_validation['errors']}")
+        logger.info(f"→ raw result on validation failure: score={result.get('score')} "
+                    f"matched={len(result.get('matched_skills',[]))} "
+                    f"missing={len(result.get('missing_skills',[]))} "
+                    f"reasoning={repr(result.get('reasoning','')[:100])}")
         last_error = Exception(f"validation: {last_validation['errors']}")
 
     logger.error(

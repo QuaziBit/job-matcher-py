@@ -398,3 +398,96 @@ class TestEscapeControlChars(unittest.TestCase):
         result = _parse_response(raw)
         self.assertEqual(result["score"], 4)
         self.assertEqual(len(result["matched_skills"]), 1)
+
+
+class TestModelCapMode(unittest.TestCase):
+    """Tests for analyzer.config.cap_mode_for_model and get_model_max_mode."""
+
+    def test_phi35_allows_all_modes(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "phi3.5:3.8b"), "detailed")
+        self.assertEqual(cap_mode_for_model("standard", "phi3.5:3.8b"), "standard")
+        self.assertEqual(cap_mode_for_model("fast",     "phi3.5:3.8b"), "fast")
+
+    def test_llama32_capped_at_standard(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "llama3.2:3b"), "standard")
+        self.assertEqual(cap_mode_for_model("standard", "llama3.2:3b"), "standard")
+        self.assertEqual(cap_mode_for_model("fast",     "llama3.2:3b"), "fast")
+
+    def test_llama31_allows_detailed(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "llama3.1:8b"), "detailed")
+        self.assertEqual(cap_mode_for_model("standard", "llama3.1:8b"), "standard")
+
+    def test_gemma3_27b_allows_detailed(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "gemma3:27b"), "detailed")
+
+    def test_gemma3_4b_capped_at_standard(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "gemma3:4b"), "standard")
+
+    def test_unknown_model_defaults_to_standard(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "unknown-model:7b"), "standard")
+        self.assertEqual(cap_mode_for_model("fast",     "unknown-model:7b"), "fast")
+
+    def test_tag_variant_matches_base(self):
+        from analyzer.config import cap_mode_for_model
+        # llama3.1:8b-instruct should match llama3.1:8b entry
+        self.assertEqual(cap_mode_for_model("detailed", "llama3.1:8b-instruct"), "detailed")
+
+
+class TestBuildSystemPromptModes(unittest.TestCase):
+    """Tests for analyzer.prompts.build_system_prompt — mode-specific schemas."""
+
+    def _prompt(self, mode: str) -> str:
+        import os
+        os.environ["ANALYSIS_MODE"] = mode
+        from analyzer.config import MODE_CONFIG
+        from analyzer.prompts import build_system_prompt
+        prompt = build_system_prompt(MODE_CONFIG[mode])
+        del os.environ["ANALYSIS_MODE"]
+        return prompt
+
+    def test_fast_has_no_snippets_on_matched(self):
+        prompt = self._prompt("fast")
+        self.assertNotIn("jd_snippet", prompt.split("matched_skills")[1].split("missing_skills")[0])
+
+    def test_fast_has_no_suggestions(self):
+        prompt = self._prompt("fast")
+        self.assertNotIn("suggestions", prompt)
+
+    def test_standard_has_jd_snippet(self):
+        prompt = self._prompt("standard")
+        self.assertIn("jd_snippet", prompt)
+
+    def test_standard_has_resume_snippet_by_default(self):
+        # Standard mode includes resume_snippet on first attempt (resume_snippet=True)
+        prompt = self._prompt("standard")
+        self.assertIn("resume_snippet", prompt)
+
+    def test_standard_drops_resume_snippet_on_retry(self):
+        # On retry, resume_snippet=False reduces output complexity
+        import os
+        from analyzer.config import MODE_CONFIG
+        from analyzer.prompts import build_system_prompt
+        os.environ["ANALYSIS_MODE"] = "standard"
+        cfg = MODE_CONFIG["standard"]
+        prompt = build_system_prompt(cfg, mode="standard", resume_snippet=False)
+        self.assertNotIn("resume_snippet", prompt)
+        self.assertIn("jd_snippet", prompt)
+
+    def test_standard_has_no_suggestions(self):
+        prompt = self._prompt("standard")
+        self.assertNotIn("suggestions", prompt)
+
+    def test_detailed_has_resume_snippet(self):
+        prompt = self._prompt("detailed")
+        self.assertIn("resume_snippet", prompt)
+
+    def test_detailed_has_suggestions(self):
+        prompt = self._prompt("detailed")
+        self.assertIn("suggestions", prompt)
+        self.assertIn("job_requirement", prompt)
