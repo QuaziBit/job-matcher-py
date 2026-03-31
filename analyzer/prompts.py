@@ -151,7 +151,7 @@ _SCHEMA_DETAILED_WRAPPER_WITH_SUGGESTIONS = """\
 _CHUNK1_SCHEMA = """\
 {
   "score": <1=poor 2=weak 3=moderate 4=strong 5=excellent>,
-  "reasoning": "<2-3 sentence honest assessment of the overall match>"
+  "reasoning": "<2 sentences MAX — must close with }>"
 }"""
 
 _CHUNK1_SCORING = """\
@@ -168,7 +168,7 @@ _CHUNK2_SCHEMA_FAST = """\
 _CHUNK2_SCHEMA_STANDARD = """\
 {{
   "matched_skills": [
-    {{"skill": "name", "match_type": "exact|partial|inferred", "jd_snippet": "<{slen} chars or empty>"}}
+    {{"skill": "name", "match_type": "exact|partial|inferred", "jd_snippet": "<{slen} chars or empty>", "resume_snippet": "<{slen} chars or empty>"}}
   ]
 }}"""
 
@@ -315,10 +315,16 @@ def build_user_prompt(resume: str, job_description: str) -> str:
 # ── Chunked prompt builders ───────────────────────────────────────────────────
 
 def build_chunk1_prompt(cfg: dict, mode: str) -> str:
-    """Chunk 1 — score + reasoning. Shared by all modes (~60 token output)."""
+    """Chunk 1 — score + reasoning. Shared by all modes.
+    Reasoning capped at 2 sentences so weak models close the JSON
+    before hitting num_predict.
+    """
     return "\n\n".join([
         _BASE_LITE,
-        "Return ONLY a JSON object with score and reasoning.",
+        (
+            "Return ONLY a JSON object with score and reasoning.\n"
+            "Keep reasoning to 2 sentences MAX. You MUST close the JSON with }."
+        ),
         _CHUNK1_SCHEMA,
         _CHUNK1_SCORING,
     ])
@@ -339,8 +345,9 @@ def build_chunk2_prompt(cfg: dict, mode: str) -> str:
         schema      = _CHUNK2_SCHEMA_STANDARD.format(slen=slen)
         instruction = (
             f"Return at most {mmatched} matched skills — skills found in BOTH the resume and JD.\n"
-            f"For jd_snippet: copy a short phrase verbatim from the JD (max {slen} chars). "
-            f"Use empty string if no direct phrase exists."
+            f"For jd_snippet: copy a short phrase verbatim from the JD (max {slen} chars).\n"
+            f"For resume_snippet: copy a short phrase verbatim from the resume (max {slen} chars).\n"
+            f"Use empty string for either if no direct phrase exists."
         )
 
     return "\n\n".join([

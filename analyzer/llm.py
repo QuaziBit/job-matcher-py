@@ -282,6 +282,25 @@ def _parse_chunk(raw: str | None, key: str, chunk_name: str) -> list | dict | No
         except Exception:
             continue
 
+    # Last resort: if the array was truncated mid-item, try to extract
+    # only the complete items by finding the last valid closing brace
+    # before the truncation point and closing the array/object there.
+    try:
+        # Find the last complete '}' before the end of the string
+        match = re.search(r"\{[^{]*\"" + key + r"\":\s*\[(.*)\]", cleaned, re.DOTALL)
+        if match:
+            # Try to find partial array content and extract complete items
+            array_content = match.group(1)
+            # Find last complete item (ends with })
+            last_complete = array_content.rfind("}")
+            if last_complete > 0:
+                truncated_fixed = '{"'  + key + '": [' + array_content[:last_complete + 1] + ']}'
+                data = _json.loads(truncated_fixed)
+                if key in data:
+                    return data[key]
+    except Exception:
+        pass
+
     logger.warning(f"✗ chunk {chunk_name}: could not parse JSON after all repair passes")
     _log_chunk(f"→ chunk {chunk_name} raw: {cleaned[:600]}")
     return None
@@ -361,7 +380,7 @@ async def call_ollama_chunked(resume: str, job_description: str) -> dict:
 
     # ── Chunk 1: score + reasoning ────────────────────────────────────────────
     sys1 = build_chunk1_prompt(cfg, actual_mode)
-    raw1 = await _call_chunk(sys1, user_prompt, model, num_predict=200, chunk_name="1/score+reasoning")
+    raw1 = await _call_chunk(sys1, user_prompt, model, num_predict=350, chunk_name="1/score+reasoning")
     score, reasoning = _parse_score_chunk(raw1)
 
     if score is None:

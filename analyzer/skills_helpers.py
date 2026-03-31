@@ -53,7 +53,7 @@ def parse_matched_skills(raw_matched: list) -> list:
     result = []
     for item in raw_matched:
         if isinstance(item, dict):
-            skill_name = normalize_skill(item.get("skill", ""))
+            skill_name = normalize_skill(item.get("skill") or item.get("name", ""))
             result.append({
                 "skill":          skill_name,
                 "match_type":     normalize_match_type(item.get("match_type", "exact")),
@@ -81,7 +81,7 @@ def parse_missing_skills(raw_missing: list) -> list:
     result = []
     for item in raw_missing:
         if isinstance(item, dict):
-            skill_name = normalize_skill(item.get("skill", str(item)))
+            skill_name = normalize_skill(item.get("skill") or item.get("name") or str(item))
             result.append({
                 "skill":            skill_name,
                 "severity":         normalize_severity(item.get("severity", "minor")),
