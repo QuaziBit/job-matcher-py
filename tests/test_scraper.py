@@ -180,3 +180,55 @@ class TestScrapeJob(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             run(scrape_job("https://example.com/job"))
         self.assertIn("Network error", str(ctx.exception))
+
+
+class TestCleanText(unittest.TestCase):
+    """Tests for utils.clean_text — control character removal."""
+
+    def test_replaces_tabs_with_space(self):
+        from utils import clean_text
+        self.assertEqual(clean_text("hello\tworld"), "hello world")
+
+    def test_removes_null_bytes(self):
+        from utils import clean_text
+        self.assertEqual(clean_text("hello\x00world"), "helloworld")
+
+    def test_removes_form_feed(self):
+        from utils import clean_text
+        self.assertEqual(clean_text("page1\x0cpage2"), "page1page2")
+
+    def test_preserves_newlines(self):
+        from utils import clean_text
+        result = clean_text("line1\nline2")
+        self.assertIn("\n", result)
+
+    def test_collapses_multiple_spaces(self):
+        from utils import clean_text
+        self.assertEqual(clean_text("too   many   spaces"), "too many spaces")
+
+    def test_handles_empty_string(self):
+        from utils import clean_text
+        self.assertEqual(clean_text(""), "")
+
+    def test_handles_none_like_empty(self):
+        from utils import clean_text
+        # None returns None (falsy check)
+        self.assertFalse(clean_text(None))
+
+    def test_multiple_control_chars(self):
+        from utils import clean_text
+        raw = "Skills:\t\tPython\x00\x07\tJava"
+        result = clean_text(raw)
+        self.assertNotIn("\t", result)
+        self.assertNotIn("\x00", result)
+        self.assertIn("Python", result)
+        self.assertIn("Java", result)
+
+    def test_pdf_paste_pattern(self):
+        from utils import clean_text
+        # Common PDF copy-paste pattern: bullet + tab + content
+        raw = "-\tMaintained Oracle PL/SQL\n-\tBuilt REST APIs"
+        result = clean_text(raw)
+        self.assertNotIn("\t", result)
+        self.assertIn("Maintained Oracle PL/SQL", result)
+        self.assertIn("Built REST APIs", result)

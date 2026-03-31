@@ -127,8 +127,8 @@ def get_context_window(model_name: str) -> int:
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimator: 1 token ≈ 4 characters."""
-    return math.ceil(len(text) / 4)
+    """Rough token estimator: 1 token ≈ 3.5 characters (more accurate than 4)."""
+    return math.ceil(len(text) / 3.5)
 
 
 def safe_num_predict(prompt: str, model_name: str, desired_output: int = 4096) -> int:
@@ -144,12 +144,33 @@ def safe_num_predict(prompt: str, model_name: str, desired_output: int = 4096) -
     - num_predict: safe value that won't overflow the model's context window
     """
     context_window = get_context_window(model_name)
-    prompt_tokens  = estimate_tokens(prompt)
-    max_safe_output = context_window - prompt_tokens
+    prompt_tokens = estimate_tokens(prompt)
+
+    # Add a 20% safety buffer on top of the estimated prompt tokens to
+    # account for tokenizer differences between models — the 1 token ≈ 4 chars
+    # estimator consistently underestimates, especially for code and JSON.
+    # Increased from 15% after observing consistent underestimation in practice.
+    buffered_prompt_tokens = int(prompt_tokens * 1.20)
+    logger.info(
+        f"→ prompt chars={len(prompt)} estimated_tokens={prompt_tokens} "
+        f"buffered={buffered_prompt_tokens} context={context_window}"
+    )
+    max_safe_output = context_window - buffered_prompt_tokens
 
     if max_safe_output <= 0:
-        logger.warning(f"⚠ prompt ({prompt_tokens} tokens) exceeds context window ({context_window}) for '{model_name}'")
-        return desired_output  # let Ollama handle it gracefully
+        logger.warning(
+            f"⚠ prompt ({prompt_tokens} tokens, buffered={buffered_prompt_tokens}) "
+            f"exceeds context window ({context_window}) for '{model_name}'"
+        )
+        return min(desired_output, context_window // 4)  # emergency fallback
 
-    result = min(desired_output, max_safe_output)
+    # Reserve at least 512 tokens as breathing room for model overhead
+    MIN_HEADROOM = 512
+    result = min(desired_output, max_safe_output - MIN_HEADROOM)
+    result = max(result, 256)  # never go below 256 — useless otherwise
+    logger.info(
+        f"→ num_predict={result} "
+        f"(context={context_window} prompt~{buffered_prompt_tokens} "
+        f"headroom={MIN_HEADROOM} desired={desired_output})"
+    )
     return result

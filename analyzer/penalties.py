@@ -74,6 +74,43 @@ def compute_adjusted_score(raw_score: int, missing: list) -> tuple:
 
 # ── Validation ────────────────────────────────────────────────────────────────
 
+def auto_correct_llm_output(result: dict) -> list[str]:
+    """
+    Auto-correct minor LLM errors in-place. Returns a list of corrections made.
+    Called before validation so these issues don't trigger unnecessary retries.
+
+    Current corrections:
+    - Remove skills that appear in both matched_skills and missing_skills.
+      llama3.1:8b in detailed mode sometimes duplicates skills across both lists.
+      Resolution: keep in matched_skills (candidate has the skill), remove from missing.
+    """
+    corrections = []
+
+    matched_names = {
+        (s["skill"] if isinstance(s, dict) else s).lower()
+        for s in result.get("matched_skills", [])
+    }
+
+    original_missing = result.get("missing_skills", [])
+    cleaned_missing  = []
+    for skill in original_missing:
+        name = (skill["skill"] if isinstance(skill, dict) else skill).lower()
+        if name in matched_names:
+            corrections.append(f"removed duplicate '{name}' from missing_skills")
+        else:
+            cleaned_missing.append(skill)
+
+    if corrections:
+        result["missing_skills"] = cleaned_missing
+
+    # Auto-correct empty reasoning — small models sometimes omit it
+    if not result.get("reasoning", "").strip():
+        result["reasoning"] = "Analysis completed. Review matched and missing skills above."
+        corrections.append("substituted empty reasoning with default message")
+
+    return corrections
+
+
 def validate_llm_output(result: dict, jd: str, resume: str) -> dict:
     """Validate LLM output. Returns {"valid": bool, "errors": list[str]}."""
     errors = []

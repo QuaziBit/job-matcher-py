@@ -3,6 +3,32 @@ utils.py — Shared helper functions for main.py.
 Extracted to keep main.py focused on route handlers only.
 """
 
+import re
+
+
+# ── Text cleaning ───────────────────────────────────────────────────────────────────────────────
+
+def clean_text(text: str) -> str:
+    """
+    Remove or normalize control characters from pasted or scraped text.
+    PDF copy-paste and resume formatting often embed literal tabs, form feeds,
+    and other control characters that break JSON serialization when the LLM
+    copies them verbatim into snippet fields.
+
+    - Tabs replaced with a single space (preserve readability)
+    - Other non-printable control chars (except newline) are removed
+    - Consecutive spaces collapsed to one
+    """
+    if not text:
+        return text
+    text = text.replace("\t", " ")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    text = re.sub(r" {2,}", " ", text)
+    return text
+
+
+
+
 
 def format_duration(seconds: int) -> str:
     """Format seconds as '1:23' or '45s'. Returns '' for zero/None."""
@@ -73,3 +99,4 @@ _format_duration    = format_duration
 _has_blocker        = has_blocker
 _determine_better_fit = determine_better_fit
 _build_comparison   = build_comparison
+_clean_text         = clean_text

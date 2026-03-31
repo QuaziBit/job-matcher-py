@@ -211,7 +211,7 @@
 
           <div class="score-meter" id="meter-{{ loop.index }}"></div>
           <div class="analysis-meta" style="flex:1;">
-            {{ a.resume_label }} · {{ a.llm_provider }}{% if a.llm_model %} ({{ a.llm_model }}){% endif %} · {{ a.created_at[:16] }}{% if a.duration_seconds %} · {{ a.duration_seconds | format_duration }}{% endif %}{% if a.analysis_mode %} · {{ a.analysis_mode }}{% endif %}
+            {{ a.resume_label }} · {{ a.llm_provider }}{% if a.llm_model %} ({{ a.llm_model }}){% endif %} · {{ a.created_at[:16] }}{% if a.duration_seconds %} · {{ a.duration_seconds | format_duration }}{% endif %}{% if a.analysis_mode %} · {% if a.analysis_mode != analysis_mode and analysis_mode == "detailed" %}{{ analysis_mode }} → {{ a.analysis_mode }}{% else %}{{ a.analysis_mode }}{% endif %}{% endif %}
           </div>
 
           <!-- Delete this analysis -->

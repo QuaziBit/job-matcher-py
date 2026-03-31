@@ -15,7 +15,7 @@ from database import get_db, init_db
 from scraper import scrape_job, assess_job_text_quality
 from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model
 from health import run_health_checks
-from utils import build_comparison, format_duration
+from utils import build_comparison, format_duration, clean_text
 
 load_dotenv()
 
@@ -329,7 +329,7 @@ async def add_job(url: str = Form(...), db: aiosqlite.Connection = Depends(get_d
     try:
         async with db.execute(
             "INSERT INTO jobs (url, title, company, location, raw_description) VALUES (?, ?, ?, ?, ?)",
-            (url, data["title"], data["company"], data["location"], data["raw_description"]),
+            (url, data["title"], data["company"], data["location"], clean_text(data["raw_description"])),
         ) as cur:
             job_id = cur.lastrowid
         await db.commit()
@@ -350,7 +350,7 @@ async def add_job_manual(
     """Store a manually pasted job description (no URL scraping)."""
     import hashlib
 
-    description = description.strip()
+    description = clean_text(description.strip())
     if len(description) < 50:
         return JSONResponse(
             {"error": "Description is too short (minimum 50 characters)."},
@@ -461,7 +461,7 @@ async def analyze_job(
                 result.get("retry_count", 0),
                 1 if result.get("used_fallback") else 0,
                 duration_seconds,
-                os.getenv("ANALYSIS_MODE", "standard"),
+                result.get("analysis_mode", os.getenv("ANALYSIS_MODE", "standard")),
             ),
         )
         await db.commit()
@@ -631,7 +631,7 @@ async def add_resume(
 ):
     try:
         async with db.execute(
-            "INSERT INTO resumes (label, content) VALUES (?, ?)", (label.strip(), content.strip())
+            "INSERT INTO resumes (label, content) VALUES (?, ?)", (label.strip(), clean_text(content.strip()))
         ) as cur:
             resume_id = cur.lastrowid
         await db.commit()

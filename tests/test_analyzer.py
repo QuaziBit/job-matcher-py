@@ -330,3 +330,71 @@ class TestAnalyzeMatchDispatch(unittest.TestCase):
         run(analyze_match("resume", "job", provider="ollama"))
         mock_ollama.assert_called_once()
         mock_anthropic.assert_not_called()
+
+
+class TestEscapeControlChars(unittest.TestCase):
+    """Tests for analyzer.parsers._escape_control_chars."""
+
+    def _fn(self):
+        from analyzer.parsers import _escape_control_chars
+        return _escape_control_chars
+
+    def test_escapes_literal_tab_inside_string(self):
+        fn = self._fn()
+        raw = '{"key": "value\twith\ttabs"}'
+        result = fn(raw)
+        import json
+        data = json.loads(result)
+        self.assertIn("\\t", repr(data["key"]))
+
+    def test_escapes_literal_newline_inside_string(self):
+        fn = self._fn()
+        raw = '{"key": "line1\nline2"}'
+        result = fn(raw)
+        import json
+        data = json.loads(result)
+        self.assertIn("\n", data["key"])
+
+    def test_escapes_literal_cr_inside_string(self):
+        fn = self._fn()
+        raw = '{"key": "value\rwith\rcr"}'
+        result = fn(raw)
+        import json
+        json.loads(result)  # should not raise
+
+    def test_does_not_break_clean_json(self):
+        fn = self._fn()
+        raw = '{"score": 4, "reasoning": "Good match."}'
+        import json
+        result = fn(raw)
+        data = json.loads(result)
+        self.assertEqual(data["score"], 4)
+
+    def test_preserves_already_escaped_sequences(self):
+        fn = self._fn()
+        raw = '{"key": "value\\twith escaped tab"}'
+        import json
+        result = fn(raw)
+        data = json.loads(result)
+        self.assertIn("\t", data["key"])
+
+    def test_parse_response_handles_tab_in_snippet(self):
+        """Integration test — _parse_response survives tabs from PDF copy-paste.
+
+        Simulates Ollama embedding a literal tab character inside a JSON string
+        value (resume_snippet field). The outer JSON structure uses \n between
+        fields as normal — only the value inside the string has a raw \t byte.
+        """
+        from analyzer import _parse_response
+        # Build the JSON string manually so we control exactly which bytes
+        # are literal vs escaped. Only the tab inside resume_snippet is raw.
+        raw = (
+            '{"score": 4, "matched_skills": [' +
+            '{"skill": "Python", "match_type": "exact", ' +
+            '"jd_snippet": "Python required", ' +
+            '"resume_snippet": "Technical Skills\\n-' + '\t' + 'Backend: Python"}' +
+            '], "missing_skills": [], "reasoning": "Good match."}'
+        )
+        result = _parse_response(raw)
+        self.assertEqual(result["score"], 4)
+        self.assertEqual(len(result["matched_skills"]), 1)

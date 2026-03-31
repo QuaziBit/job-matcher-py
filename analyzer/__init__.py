@@ -78,6 +78,7 @@ from analyzer.skills_helpers import (
 from analyzer.penalties import (
     penalty_for_skill,
     compute_adjusted_score,
+    auto_correct_llm_output,
     validate_llm_output,
     partial_fallback_analysis,
     _compute_adjusted_score,
@@ -103,5 +104,5 @@ __all__ = [
     "parse_matched_skills", "parse_missing_skills", "parse_suggestions", "keyword_boost",
     "normalize_match_type", "normalize_severity", "normalize_requirement_type",
     # Penalties
-    "penalty_for_skill", "compute_adjusted_score", "validate_llm_output", "partial_fallback_analysis",
+    "penalty_for_skill", "compute_adjusted_score", "auto_correct_llm_output", "validate_llm_output", "partial_fallback_analysis",
 ]

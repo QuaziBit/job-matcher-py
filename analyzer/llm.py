@@ -13,9 +13,9 @@ from analyzer.config import (
     get_mode_config, ollama_base_url, ollama_model,
 )
 from analyzer.parsers import parse_response
+from ollama_utils import safe_num_predict, estimate_tokens, get_context_window
 from analyzer.penalties import validate_llm_output, partial_fallback_analysis
 from analyzer.prompts import build_system_prompt, build_user_prompt
-from ollama_utils import safe_num_predict
 
 logger = logging.getLogger("analyzer.llm")
 
@@ -38,6 +38,7 @@ async def call_anthropic_once(resume: str, job_description: str) -> dict:
         messages=[{"role": "user", "content": build_user_prompt(resume, job_description)}],
     )
     raw    = message.content[0].text
+    logger.debug(f"→ raw Anthropic response ({len(raw)} chars):\n{raw[:2000]}")
     result = parse_response(raw, job_description, cfg)
     result["llm_provider"]  = "anthropic"
     result["llm_model"]     = ANTHROPIC_MODEL
@@ -48,10 +49,74 @@ async def call_anthropic_once(resume: str, job_description: str) -> dict:
 async def call_ollama_once(resume: str, job_description: str) -> dict:
     cfg   = get_mode_config()
     model = ollama_model()
-    system_prompt = build_system_prompt(cfg)
+
+    # Pre-flight: if the combined prompt is too large for the model's context
+    # window, trim the job description so the model has enough room to respond.
+    # Target: leave at least desired_output + 512 headroom tokens for the response.
+    system_prompt  = build_system_prompt(cfg)
+    context_window = get_context_window(model)
+    desired_output = cfg["num_predict"]
+    MIN_OUTPUT     = int(desired_output * 0.80)  # require at least 80% of desired output tokens
+
+    actual_mode   = os.getenv("ANALYSIS_MODE", "standard").lower()  # may be updated if mode is downgraded
     full_prompt   = system_prompt + build_user_prompt(resume, job_description)
-    num_predict   = safe_num_predict(full_prompt, model_name=model,
-                                     desired_output=cfg["num_predict"])
+    prompt_tokens = int(estimate_tokens(full_prompt) * 1.20)  # 20% buffer
+
+    # Calculate how much room is left for the model to generate output
+    available_for_output = context_window - prompt_tokens - 512
+
+    logger.debug(
+        f"→ context pre-flight: model={model} context={context_window} "
+        f"prompt_chars={len(full_prompt)} prompt_tokens~{prompt_tokens} "
+        f"available={available_for_output} min_required={MIN_OUTPUT} "
+        f"desired={desired_output}"
+    )
+
+    if available_for_output < MIN_OUTPUT:
+        overhead         = estimate_tokens(system_prompt + build_user_prompt(resume, ""))
+        overhead_buf     = int(overhead * 1.20)
+        original_jd_len  = len(job_description)
+
+        # First try: downgrade mode to reduce desired_output before trimming JD
+        current_mode = os.getenv("ANALYSIS_MODE", "standard").lower()
+        fallback_modes = {"detailed": ("standard", 1800), "standard": ("fast", 800)}
+        if current_mode in fallback_modes:
+            downgraded_mode, downgraded_output = fallback_modes[current_mode]
+            downgraded_available = context_window - overhead_buf - downgraded_output - 512
+            if downgraded_available >= int(downgraded_output * 0.80):
+                logger.warning(
+                    f"⚠ prompt too large for {model} in {current_mode} mode "
+                    f"(available={available_for_output} < min={MIN_OUTPUT}) — "
+                    f"downgrading to {downgraded_mode} mode "
+                    f"(desired_output {desired_output} → {downgraded_output})"
+                )
+                from analyzer.config import MODE_CONFIG
+                cfg            = MODE_CONFIG[downgraded_mode]
+                desired_output = downgraded_output
+                MIN_OUTPUT     = int(desired_output * 0.80)
+                system_prompt  = build_system_prompt(cfg)
+                full_prompt    = system_prompt + build_user_prompt(resume, job_description)
+                prompt_tokens  = int(estimate_tokens(full_prompt) * 1.20)
+                available_for_output = context_window - prompt_tokens - 512
+                actual_mode    = downgraded_mode
+
+        # Second try: trim JD if still too large after mode downgrade
+        if available_for_output < MIN_OUTPUT:
+            max_jd_tokens   = context_window - overhead_buf - desired_output - 512
+            max_jd_chars    = max(500, int(max_jd_tokens * 3.5))
+            if original_jd_len > max_jd_chars:
+                job_description = job_description[:max_jd_chars] + "\n\n[...truncated]"
+                full_prompt     = system_prompt + build_user_prompt(resume, job_description)
+                new_prompt_tok  = int(estimate_tokens(full_prompt) * 1.20)
+                new_available   = context_window - new_prompt_tok - 512
+                logger.warning(
+                    f"⚠ still too large after mode adjustment — "
+                    f"trimmed JD {original_jd_len} → {max_jd_chars} chars "
+                    f"(overhead~{overhead_buf} tokens, new available={new_available})"
+                )
+
+    num_predict = safe_num_predict(full_prompt, model_name=model,
+                                   desired_output=desired_output)
     payload = {
         "model": model,
         "messages": [
@@ -75,11 +140,21 @@ async def call_ollama_once(resume: str, job_description: str) -> dict:
         except httpx.HTTPStatusError as e:
             raise ValueError(f"Ollama error: {e.response.status_code} — {e.response.text}")
 
-    raw    = resp.json()["message"]["content"]
+    resp_json = resp.json()
+    raw       = resp_json["message"]["content"]
+
+    # Log token usage from Ollama response if available
+    eval_count   = resp_json.get("eval_count", "?")
+    prompt_eval  = resp_json.get("prompt_eval_count", "?")
+    logger.debug(
+        f"→ raw Ollama response ({len(raw)} chars) "
+        f"prompt_tokens={prompt_eval} output_tokens={eval_count}:\n{raw[:2000]}"
+    )
+
     result = parse_response(raw, job_description, cfg)
     result["llm_provider"]  = "ollama"
     result["llm_model"]     = model
-    result["analysis_mode"] = os.getenv("ANALYSIS_MODE", "standard")
+    result["analysis_mode"] = actual_mode
     return result
 
 
@@ -102,6 +177,10 @@ async def analyze_match(resume: str, job_description: str, provider: str = "anth
             )
 
         try:
+            logger.debug(
+                f"→ attempt {attempt + 1}/{MAX_RETRIES} provider={provider} "
+                f"resume={len(resume)} chars jd={len(job_description)} chars"
+            )
             import analyzer.llm as _self
             if provider == "ollama":
                 result = await _self.call_ollama_once(resume, job_description)
@@ -122,7 +201,10 @@ async def analyze_match(resume: str, job_description: str, provider: str = "anth
         logger.error(f"✗ LLM output validation failed: {last_validation['errors']}")
         last_error = Exception(f"validation: {last_validation['errors']}")
 
-    logger.error(f"✗ All {MAX_RETRIES} attempts failed, using fallback analysis")
+    logger.error(
+        f"✗ All {MAX_RETRIES} attempts failed, using fallback analysis. "
+        f"Last error: {last_error}"
+    )
     fallback = partial_fallback_analysis()
     fallback["validation_errors"] = "; ".join(last_validation["errors"])
     fallback["llm_provider"] = provider
