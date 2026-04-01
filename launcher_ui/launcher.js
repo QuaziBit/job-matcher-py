@@ -47,7 +47,7 @@ function applyLayout() {
 
 // Sync form values from vertical → horizontal when switching to horizontal
 function syncToHorizontal() {
-  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout'];
+  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout','show_more_logs'];
   fields.forEach(id => {
     const src = $(id); const dst = $('h-' + id);
     if (src && dst) dst.value = src.value;
@@ -63,7 +63,7 @@ function syncToHorizontal() {
 
 // Sync form values from horizontal → vertical when switching to vertical
 function syncToVertical() {
-  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout'];
+  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout','show_more_logs'];
   fields.forEach(id => {
     const src = $('h-' + id); const dst = $(id);
     if (src && dst) dst.value = src.value;
@@ -157,6 +157,8 @@ function buildFormData() {
   fd.append('anthropic_api_key', ($(pfx + 'anthropic_api_key') || {value:''}).value);
   fd.append('openai_api_key',   ($(pfx + 'openai_api_key')   || {value:''}).value);
   fd.append('gemini_api_key',   ($(pfx + 'gemini_api_key')   || {value:''}).value);
+  const smlEl = $(pfx + 'show_more_logs');
+  if (smlEl && smlEl.checked) fd.append('show_more_logs', 'true');
   fd.append('ollama_base_url',   ($(pfx + 'ollama_base_url')   || {value:''}).value);
   fd.append('ollama_model',      ($(pfx + 'ollama_model')      || {value:''}).value);
   fd.append('ollama_timeout',    ($(pfx + 'ollama_timeout')    || {value:''}).value);

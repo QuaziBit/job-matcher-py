@@ -126,7 +126,8 @@ def render_launcher_page(cfg: dict) -> str:
     ollama_url    = cfg.get("ollama_base_url", "http://localhost:11434")
     ollama_model  = cfg.get("ollama_model", "llama3.1:8b")
     ollama_timeout = cfg.get("ollama_timeout", 600)
-    analysis_mode = cfg.get("analysis_mode", "standard")
+    analysis_mode  = cfg.get("analysis_mode", "standard")
+    show_more_logs = cfg.get("show_more_logs", False)
 
     html_path = os.path.join(_LAUNCHER_UI_DIR, "launcher.html")
     with open(html_path, encoding="utf-8") as f:
@@ -142,9 +143,10 @@ def render_launcher_page(cfg: dict) -> str:
         ollama_url     = ollama_url,
         ollama_model   = ollama_model,
         ollama_timeout = ollama_timeout,
-        checked_fast     = "checked" if analysis_mode == "fast"     else "",
-        checked_standard = "checked" if analysis_mode == "standard" else "",
-        checked_detailed = "checked" if analysis_mode == "detailed" else "",
+        checked_fast           = "checked" if analysis_mode == "fast"     else "",
+        checked_standard       = "checked" if analysis_mode == "standard" else "",
+        checked_detailed       = "checked" if analysis_mode == "detailed" else "",
+        checked_show_more_logs = "checked" if show_more_logs else "",
     )
 # ── HTTP request handler ──────────────────────────────────────────────────────
 
@@ -292,6 +294,8 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 cfg["analysis_mode"] = v
             else:
                 logger.warning(f"✗ Invalid analysis_mode {v!r}")
+        # Checkbox — present in form = true, absent = false
+        cfg["show_more_logs"] = "show_more_logs" in form
 
         key = cfg.get("anthropic_api_key", "")
         masked = (key[:12] + "...") if key else "not set"
@@ -375,6 +379,7 @@ class Launcher:
                 "APP_PORT":          str(cfg.get("port", 8000)),
                 "APP_HOST":          cfg.get("host", "127.0.0.1"),
                 "ANALYSIS_MODE":     cfg.get("analysis_mode", "standard"),
+                "SHOW_MORE_LOGS":    "true" if cfg.get("show_more_logs") else "false",
             }
 
             # Update existing lines

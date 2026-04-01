@@ -695,6 +695,7 @@ if __name__ == "__main__":
         "ollama_model":      os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         "ollama_timeout":    int(os.getenv("OLLAMA_TIMEOUT", "600")),
         "analysis_mode":     os.getenv("ANALYSIS_MODE", "standard"),
+        "show_more_logs":    os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes"),
     }
 
     launcher_instance = Launcher(initial_cfg)

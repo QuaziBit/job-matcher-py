@@ -118,6 +118,16 @@
           </label>
         </div>
       </div>
+      <div class="form-row">
+        <label>Verbose Logging</label>
+        <div class="toggle-group">
+          <label class="toggle-option">
+            <input type="checkbox" id="show_more_logs" {checked_show_more_logs}/>
+            <span>SHOW_MORE_LOGS</span>
+            <small>raw LLM responses in terminal</small>
+          </label>
+        </div>
+      </div>
     </div>
 
     <button class="btn btn-primary" id="start-btn" onclick="startApp()">
@@ -242,6 +252,16 @@
                 <input type="radio" name="h-analysis_mode" value="detailed" {checked_detailed}/>
                 <span>Detailed</span>
                 <small>~4min</small>
+              </label>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Verbose Logging</label>
+            <div class="toggle-group">
+              <label class="toggle-option">
+                <input type="checkbox" id="h-show_more_logs" {checked_show_more_logs}/>
+                <span>SHOW_MORE_LOGS</span>
+                <small>raw LLM responses in terminal</small>
               </label>
             </div>
           </div>
