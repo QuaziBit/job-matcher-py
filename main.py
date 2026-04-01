@@ -14,6 +14,8 @@ import aiosqlite
 from database import get_db, init_db
 from scraper import scrape_job, assess_job_text_quality
 from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model
+from analyzer.config import anthropic_model, openai_model, gemini_model
+from analyzer.known_models import KNOWN_MODELS
 from health import run_health_checks
 from utils import build_comparison, format_duration, clean_text
 
@@ -152,6 +154,9 @@ async def job_detail(job_id: int, request: Request, db: aiosqlite.Connection = D
         "analyses":         analyses,
         "resumes":          resumes,
         "ollama_model":     _ollama_model(),
+        "anthropic_model":  anthropic_model(),
+        "openai_model":     openai_model(),
+        "gemini_model":     gemini_model(),
         "text_quality":     text_quality,
         "comparison":       comparison,
         "analysis_mode":    os.getenv("ANALYSIS_MODE", "standard"),
@@ -398,6 +403,8 @@ async def analyze_job(
     resume_id: int = Form(...),
     provider: str = Form("anthropic"),
     analysis_mode: str = Form(""),
+    ollama_model: str = Form(""),
+    cloud_model: str = Form(""),
     db: aiosqlite.Connection = Depends(get_db),
 ):
     try:
@@ -418,10 +425,20 @@ async def analyze_job(
 
     try:
         import time as _time
-        # Apply analysis_mode from form if provided, overriding env var for this request
+        # Apply analysis_mode, ollama_model, and cloud_model from form if provided
         _valid_modes = {"fast", "standard", "detailed"}
         if analysis_mode and analysis_mode in _valid_modes:
             os.environ["ANALYSIS_MODE"] = analysis_mode
+        if ollama_model and provider == "ollama":
+            os.environ["OLLAMA_MODEL"] = ollama_model
+        if cloud_model:
+            _model_env = {
+                "anthropic": "ANTHROPIC_MODEL",
+                "openai":    "OPENAI_MODEL",
+                "gemini":    "GEMINI_MODEL",
+            }
+            if env_key := _model_env.get(provider):
+                os.environ[env_key] = cloud_model
         _start           = _time.monotonic()
         result           = await analyze_match(resume["content"], job["raw_description"], provider)
         duration_seconds = int(_time.monotonic() - _start)
@@ -668,6 +685,15 @@ async def get_description(job_id: int, db: aiosqlite.Connection = Depends(get_db
     if not row:
         raise HTTPException(status_code=404)
     return JSONResponse({"description": row["raw_description"]})
+
+
+# ── Known models endpoint ────────────────────────────────────────────────────
+
+@app.get("/api/providers/models")
+async def get_provider_models(provider: str):
+    """Return known models for a cloud provider with cost labels."""
+    models = KNOWN_MODELS.get(provider, [])
+    return JSONResponse({"provider": provider, "models": models})
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────

@@ -311,6 +311,138 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(resp.status_code, 404)
 
+    async def test_analyze_passes_analysis_mode(self):
+        """analysis_mode form param should be applied before LLM call."""
+        import os
+        r = await self.client.post("/api/resumes/add", data={
+            "label": "v1", "content": MOCK_RESUME_DEVSECOPS
+        })
+        rid = r.json()["resume_id"]
+
+        with patch("main.scrape_job") as mock_scrape:
+            mock_scrape.return_value = {
+                "title": "Dev", "company": "Co", "location": "VA",
+                "raw_description": MOCK_JOB_DEVSECOPS
+            }
+            j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/mode-test"})
+        jid = j.json()["job_id"]
+
+        captured_mode = {}
+        with patch("main.analyze_match") as mock_analyze:
+            def capture(*args, **kwargs):
+                captured_mode["mode"] = os.environ.get("ANALYSIS_MODE")
+                return {
+                    "score": 3, "adjusted_score": 3,
+                    "penalty_breakdown": {"blockers":0,"majors":0,"minors":0,"blocker_penalty":0,"major_penalty":0,"minor_penalty":0,"count_penalty":0,"total_penalty":0},
+                    "matched_skills": [], "missing_skills": [],
+                    "reasoning": "ok.", "llm_provider": "anthropic", "llm_model": anthropic_model(),
+                }
+            mock_analyze.side_effect = capture
+            await self.client.post(f"/api/jobs/{jid}/analyze", data={
+                "resume_id": rid, "provider": "anthropic", "analysis_mode": "detailed"
+            })
+        self.assertEqual(captured_mode.get("mode"), "detailed")
+
+    async def test_analyze_passes_ollama_model(self):
+        """ollama_model form param should be applied to OLLAMA_MODEL env before call."""
+        import os
+        r = await self.client.post("/api/resumes/add", data={
+            "label": "v1", "content": MOCK_RESUME_DEVSECOPS
+        })
+        rid = r.json()["resume_id"]
+
+        with patch("main.scrape_job") as mock_scrape:
+            mock_scrape.return_value = {
+                "title": "Dev", "company": "Co", "location": "VA",
+                "raw_description": MOCK_JOB_DEVSECOPS
+            }
+            j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/ollama-model-test"})
+        jid = j.json()["job_id"]
+
+        captured = {}
+        with patch("main.analyze_match") as mock_analyze:
+            def capture(*args, **kwargs):
+                captured["model"] = os.environ.get("OLLAMA_MODEL")
+                return {
+                    "score": 3, "adjusted_score": 3,
+                    "penalty_breakdown": {"blockers":0,"majors":0,"minors":0,"blocker_penalty":0,"major_penalty":0,"minor_penalty":0,"count_penalty":0,"total_penalty":0},
+                    "matched_skills": [], "missing_skills": [],
+                    "reasoning": "ok.", "llm_provider": "ollama", "llm_model": "gemma3:27b",
+                }
+            mock_analyze.side_effect = capture
+            await self.client.post(f"/api/jobs/{jid}/analyze", data={
+                "resume_id": rid, "provider": "ollama", "ollama_model": "gemma3:27b"
+            })
+        self.assertEqual(captured.get("model"), "gemma3:27b")
+
+    async def test_analyze_passes_cloud_model(self):
+        """cloud_model form param should set the correct provider env var."""
+        import os
+        r = await self.client.post("/api/resumes/add", data={
+            "label": "v1", "content": MOCK_RESUME_DEVSECOPS
+        })
+        rid = r.json()["resume_id"]
+
+        with patch("main.scrape_job") as mock_scrape:
+            mock_scrape.return_value = {
+                "title": "Dev", "company": "Co", "location": "VA",
+                "raw_description": MOCK_JOB_DEVSECOPS
+            }
+            j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/cloud-model-test"})
+        jid = j.json()["job_id"]
+
+        captured = {}
+        with patch("main.analyze_match") as mock_analyze:
+            def capture(*args, **kwargs):
+                captured["model"] = os.environ.get("OPENAI_MODEL")
+                return {
+                    "score": 3, "adjusted_score": 3,
+                    "penalty_breakdown": {"blockers":0,"majors":0,"minors":0,"blocker_penalty":0,"major_penalty":0,"minor_penalty":0,"count_penalty":0,"total_penalty":0},
+                    "matched_skills": [], "missing_skills": [],
+                    "reasoning": "ok.", "llm_provider": "openai", "llm_model": "gpt-4o",
+                }
+            mock_analyze.side_effect = capture
+            await self.client.post(f"/api/jobs/{jid}/analyze", data={
+                "resume_id": rid, "provider": "openai", "cloud_model": "gpt-4o"
+            })
+        self.assertEqual(captured.get("model"), "gpt-4o")
+
+    async def test_get_provider_models_anthropic(self):
+        """GET /api/providers/models?provider=anthropic returns known models."""
+        resp = await self.client.get("/api/providers/models?provider=anthropic")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["provider"], "anthropic")
+        self.assertIsInstance(data["models"], list)
+        self.assertGreater(len(data["models"]), 0)
+        ids = [m["id"] for m in data["models"]]
+        self.assertIn("claude-sonnet-4-6", ids)
+
+    async def test_get_provider_models_openai(self):
+        resp = await self.client.get("/api/providers/models?provider=openai")
+        self.assertEqual(resp.status_code, 200)
+        ids = [m["id"] for m in resp.json()["models"]]
+        self.assertIn("gpt-4o-mini", ids)
+
+    async def test_get_provider_models_gemini(self):
+        resp = await self.client.get("/api/providers/models?provider=gemini")
+        self.assertEqual(resp.status_code, 200)
+        ids = [m["id"] for m in resp.json()["models"]]
+        self.assertIn("gemini-2.5-flash", ids)
+
+    async def test_get_provider_models_unknown_returns_empty(self):
+        resp = await self.client.get("/api/providers/models?provider=unknown")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["models"], [])
+
+    async def test_get_provider_models_each_has_id_and_label(self):
+        """Every model entry must have id and label fields."""
+        for provider in ["anthropic", "openai", "gemini"]:
+            resp = await self.client.get(f"/api/providers/models?provider={provider}")
+            for m in resp.json()["models"]:
+                self.assertIn("id", m, f"{provider} model missing 'id'")
+                self.assertIn("label", m, f"{provider} model missing 'label'")
+
     @patch("main.scrape_job")
     async def test_save_and_update_application(self, mock_scrape):
         mock_scrape.return_value = {

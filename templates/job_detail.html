@@ -63,6 +63,8 @@
       </div>
 
       <div class="form-grid" style="margin-bottom: 14px;">
+
+        <!-- Left column: Resume Version -->
         <div class="form-row" style="margin:0;">
           <label>Resume Version</label>
           {% if resumes %}
@@ -78,19 +80,49 @@
           {% endif %}
         </div>
 
-        <div class="form-row" style="margin:0;">
-          <label>LLM Provider</label>
-          <div class="llm-toggle">
-            <input type="radio" name="provider" id="p-anthropic" value="anthropic" {% if last_provider == 'anthropic' or not last_provider %}checked{% endif %} />
-            <label for="p-anthropic">Anthropic</label>
-            <input type="radio" name="provider" id="p-openai" value="openai" {% if last_provider == 'openai' %}checked{% endif %} />
-            <label for="p-openai">OpenAI</label>
-            <input type="radio" name="provider" id="p-gemini" value="gemini" {% if last_provider == 'gemini' %}checked{% endif %} />
-            <label for="p-gemini">Gemini</label>
-            <input type="radio" name="provider" id="p-ollama" value="ollama" {% if last_provider == 'ollama' %}checked{% endif %} />
-            <label for="p-ollama">Ollama ({{ ollama_model }})</label>
+        <!-- Right column: Provider + Mode + Ollama model stacked -->
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <div class="form-row" style="margin:0;">
+            <label>LLM Provider</label>
+            <div class="llm-toggle">
+              <input type="radio" name="provider" id="p-anthropic" value="anthropic" {% if last_provider == 'anthropic' or not last_provider %}checked{% endif %} />
+              <label for="p-anthropic">Anthropic</label>
+              <input type="radio" name="provider" id="p-openai" value="openai" {% if last_provider == 'openai' %}checked{% endif %} />
+              <label for="p-openai">OpenAI</label>
+              <input type="radio" name="provider" id="p-gemini" value="gemini" {% if last_provider == 'gemini' %}checked{% endif %} />
+              <label for="p-gemini">Gemini</label>
+              <input type="radio" name="provider" id="p-ollama" value="ollama" {% if last_provider == 'ollama' %}checked{% endif %} />
+              <label for="p-ollama">Ollama</label>
+            </div>
+          </div>
+
+          <div class="form-row" id="cloud-model-row" style="display:none; margin:0;">
+            <label>Model</label>
+            <select id="cloud-model-select"
+              data-anthropic="{{ anthropic_model }}"
+              data-openai="{{ openai_model }}"
+              data-gemini="{{ gemini_model }}">
+              <option value="">Loading…</option>
+            </select>
+          </div>
+
+          <div class="form-row" id="ollama-model-row" style="display:none; margin:0;">
+            <label>Ollama Model</label>
+            <select id="ollama-model-select">
+              <option value="{{ ollama_model }}">{{ ollama_model }}</option>
+            </select>
+          </div>
+
+          <div class="form-row" style="margin:0;">
+            <label>Analysis Mode</label>
+            <select id="analysis-mode-select">
+              <option value="fast"     {% if analysis_mode == 'fast' %}selected{% endif %}>Fast — ~30s · no suggestions</option>
+              <option value="standard" {% if analysis_mode == 'standard' %}selected{% endif %}>Standard — ~90s · suggestions on</option>
+              <option value="detailed" {% if analysis_mode == 'detailed' %}selected{% endif %}>Detailed — ~4min · all skills</option>
+            </select>
           </div>
         </div>
+
       </div>
 
       <button

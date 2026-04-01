@@ -218,6 +218,85 @@ function formatElapsed(seconds) {
 }
 
 
+// ── Provider model selectors ──────────────────────────────────────────────────
+
+async function populateOllamaModels() {
+  const sel = document.getElementById('ollama-model-select');
+  if (!sel) return;
+  try {
+    const res  = await fetch('http://localhost:11434/api/tags');
+    if (!res.ok) return;
+    const data = await res.json();
+    const models = (data.models || []).map(m => m.name).sort();
+    if (!models.length) return;
+    const current = sel.value;
+    sel.innerHTML = '';
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      if (m === current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    if (!models.includes(current) && current) {
+      const opt = document.createElement('option');
+      opt.value = current; opt.textContent = current;
+      opt.selected = true;
+      sel.insertBefore(opt, sel.firstChild);
+    }
+  } catch(e) {
+    log('populateOllamaModels', 'could not reach Ollama:', e.message);
+  }
+}
+
+async function populateCloudModels(provider) {
+  const sel = document.getElementById('cloud-model-select');
+  if (!sel) return;
+  try {
+    const res  = await fetch(`/api/providers/models?provider=${provider}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const models = data.models || [];
+    if (!models.length) return;
+    // Current configured model from env — stored per-provider in data attributes
+    const current = sel.dataset[provider] || '';
+    sel.innerHTML = '';
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.label;
+      if (m.id === current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    // If configured model not in list, prepend it
+    const ids = models.map(m => m.id);
+    if (current && !ids.includes(current)) {
+      const opt = document.createElement('option');
+      opt.value = current; opt.textContent = current + ' · (configured)';
+      opt.selected = true;
+      sel.insertBefore(opt, sel.firstChild);
+    }
+  } catch(e) {
+    log('populateCloudModels', 'error:', e.message);
+  }
+}
+
+function updateProviderModelRow() {
+  const providerInput = document.querySelector('input[name="provider"]:checked');
+  const provider      = providerInput ? providerInput.value : '';
+  const ollamaRow     = document.getElementById('ollama-model-row');
+  const cloudRow      = document.getElementById('cloud-model-row');
+  if (!ollamaRow || !cloudRow) return;
+
+  const isOllama = provider === 'ollama';
+  const isCloud  = ['anthropic', 'openai', 'gemini'].includes(provider);
+
+  ollamaRow.style.display = isOllama ? '' : 'none';
+  cloudRow.style.display  = isCloud  ? '' : 'none';
+
+  if (isOllama) populateOllamaModels();
+  if (isCloud)  populateCloudModels(provider);
+}
+
 // ── Analyze job ───────────────────────────────────────────────────────────────
 
 async function analyzeJob(jobId) {
@@ -230,25 +309,25 @@ async function analyzeJob(jobId) {
     toast('Please select a resume first', 'error'); return;
   }
 
-  const provider    = providerInput ? providerInput.value : 'anthropic';
-  const ollamaLabel = document.querySelector('label[for="p-ollama"]');
-  const _providerModelMap = {
-    'anthropic': 'claude-opus-4-5',
-    'openai':    'gpt-4o-mini',
-    'gemini':    'gemini-2.0-flash',
-    'ollama':    ollamaLabel ? ollamaLabel.textContent.trim() : 'Ollama',
-  };
-  const model = _providerModelMap[provider] || provider;
-  const mode = btn ? (btn.dataset.mode || 'standard') : 'standard';
+  const provider      = providerInput ? providerInput.value : 'anthropic';
+  const modeSelect    = document.getElementById('analysis-mode-select');
+  const ollamaSelect  = document.getElementById('ollama-model-select');
+  const cloudSelect   = document.getElementById('cloud-model-select');
+  const mode          = modeSelect ? modeSelect.value : (btn ? (btn.dataset.mode || 'standard') : 'standard');
+  const ollamaModel   = (provider === 'ollama' && ollamaSelect) ? ollamaSelect.value : '';
+  const cloudModel    = (['anthropic','openai','gemini'].includes(provider) && cloudSelect) ? cloudSelect.value : '';
+  const displayModel  = ollamaModel || cloudModel || provider;
 
   btn.disabled    = true;
   btn.textContent = 'Analyzing…';
-  startProgress(provider, model, mode);
+  startProgress(provider, displayModel, mode);
 
   const fd = new FormData();
   fd.append('resume_id',     resumeSelect.value);
   fd.append('provider',      provider);
   fd.append('analysis_mode', mode);
+  if (provider === 'ollama' && ollamaModel) fd.append('ollama_model', ollamaModel);
+  if (['anthropic','openai','gemini'].includes(provider) && cloudModel) fd.append('cloud_model', cloudModel);
 
   try {
     log('analyzeJob', `POST /api/jobs/${jobId}/analyze`);
@@ -478,6 +557,12 @@ document.addEventListener("DOMContentLoaded", () => {
   log("init", "DOMContentLoaded fired");
   initTabs();
   initAddModeToggle();
+
+  // Wire provider radio buttons to show/hide model row
+  document.querySelectorAll('input[name="provider"]').forEach(radio => {
+    radio.addEventListener('change', updateProviderModelRow);
+  });
+  updateProviderModelRow();
 
   const addJobForm = document.getElementById("add-job-form");
   if (addJobForm) {
