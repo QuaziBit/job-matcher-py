@@ -477,6 +477,85 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn(b"Resume Versions", resp.content)
 
+    @patch("main.scrape_job")
+    @patch("main.analyze_match")
+    async def test_job_detail_preselects_last_model(self, mock_analyze, mock_scrape):
+        """Job detail page should pre-select the model used in the last analysis."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS
+        }
+        mock_analyze.return_value = {
+            "score": 4, "adjusted_score": 4,
+            "penalty_breakdown": {"blockers":0,"majors":0,"minors":0,"blocker_penalty":0,"major_penalty":0,"minor_penalty":0,"count_penalty":0,"total_penalty":0},
+            "matched_skills": ["Python"], "missing_skills": [],
+            "reasoning": "ok.", "llm_provider": "openai", "llm_model": "gpt-4o",
+            "analysis_mode": "detailed",
+        }
+
+        r = await self.client.post("/api/resumes/add", data={
+            "label": "v1", "content": MOCK_RESUME_DEVSECOPS
+        })
+        rid = r.json()["resume_id"]
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/preselect-model"})
+        jid = j.json()["job_id"]
+
+        await self.client.post(f"/api/jobs/{jid}/analyze", data={
+            "resume_id": rid, "provider": "openai", "cloud_model": "gpt-4o", "analysis_mode": "detailed"
+        })
+
+        resp = await self.client.get(f"/job/{jid}")
+        self.assertEqual(resp.status_code, 200)
+        # gpt-4o should appear as the pre-selected model in the page
+        self.assertIn(b"gpt-4o", resp.content)
+
+    @patch("main.scrape_job")
+    @patch("main.analyze_match")
+    async def test_job_detail_preselects_last_analysis_mode(self, mock_analyze, mock_scrape):
+        """Job detail page should pre-select the analysis mode from the last analysis."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS
+        }
+        mock_analyze.return_value = {
+            "score": 4, "adjusted_score": 4,
+            "penalty_breakdown": {"blockers":0,"majors":0,"minors":0,"blocker_penalty":0,"major_penalty":0,"minor_penalty":0,"count_penalty":0,"total_penalty":0},
+            "matched_skills": ["Python"], "missing_skills": [],
+            "reasoning": "ok.", "llm_provider": "anthropic", "llm_model": anthropic_model(),
+            "analysis_mode": "fast",
+        }
+
+        r = await self.client.post("/api/resumes/add", data={
+            "label": "v1", "content": MOCK_RESUME_DEVSECOPS
+        })
+        rid = r.json()["resume_id"]
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/preselect-mode"})
+        jid = j.json()["job_id"]
+
+        await self.client.post(f"/api/jobs/{jid}/analyze", data={
+            "resume_id": rid, "provider": "anthropic", "analysis_mode": "fast"
+        })
+
+        resp = await self.client.get(f"/job/{jid}")
+        self.assertEqual(resp.status_code, 200)
+        # fast option should be selected in the mode dropdown
+        self.assertIn(b'value="fast"', resp.content)
+
+    @patch("main.scrape_job")
+    async def test_job_detail_no_analyses_uses_env_defaults(self, mock_scrape):
+        """With no analyses, model and mode should fall back to env defaults."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/no-analyses"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get(f"/job/{jid}")
+        self.assertEqual(resp.status_code, 200)
+        # Page should render without error — defaults applied
+        self.assertIn(b"Run New Analysis", resp.content)
+
     async def test_job_detail_404_for_missing(self):
         resp = await self.client.get("/job/9999")
         self.assertEqual(resp.status_code, 404)

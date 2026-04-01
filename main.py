@@ -142,10 +142,13 @@ async def job_detail(job_id: int, request: Request, db: aiosqlite.Connection = D
     salary_data = json.loads(job["salary_estimate"]) if job.get("salary_estimate") else None
     if analyses:
         last_provider = analyses[0]["llm_provider"]
+        last_model    = analyses[0].get("llm_model", "")
     elif salary_data and salary_data.get("llm_provider"):
         last_provider = salary_data["llm_provider"]
+        last_model    = salary_data.get("llm_model", "")
     else:
         last_provider = "anthropic"
+        last_model    = ""
 
     return templates.TemplateResponse("job_detail.html", {
         "request":          request,
@@ -153,13 +156,13 @@ async def job_detail(job_id: int, request: Request, db: aiosqlite.Connection = D
         "application":      application,
         "analyses":         analyses,
         "resumes":          resumes,
-        "ollama_model":     _ollama_model(),
-        "anthropic_model":  anthropic_model(),
-        "openai_model":     openai_model(),
-        "gemini_model":     gemini_model(),
+        "ollama_model":     last_model if last_provider == "ollama"    else _ollama_model(),
+        "anthropic_model":  last_model if last_provider == "anthropic" else anthropic_model(),
+        "openai_model":     last_model if last_provider == "openai"    else openai_model(),
+        "gemini_model":     last_model if last_provider == "gemini"    else gemini_model(),
         "text_quality":     text_quality,
         "comparison":       comparison,
-        "analysis_mode":    os.getenv("ANALYSIS_MODE", "standard"),
+        "analysis_mode":    analyses[0].get("analysis_mode") or os.getenv("ANALYSIS_MODE", "standard") if analyses else os.getenv("ANALYSIS_MODE", "standard"),
         "salary_estimate":  json.loads(job["salary_estimate"]) if job.get("salary_estimate") else None,
         "has_salary_in_jd": _job_has_salary(job.get("raw_description", "")),
         "last_resume_id":   last_resume_id,
