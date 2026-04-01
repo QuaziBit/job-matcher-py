@@ -201,9 +201,9 @@ async def jobs_list(
     if score not in valid_scores:
         return JSONResponse({"error": f"invalid score {score!r} — must be one of: 0, 1, 2, 3, 4, 5"}, status_code=400)
 
-    valid_providers = {"", "anthropic", "ollama", "manual"}
+    valid_providers = {"", "anthropic", "openai", "gemini", "ollama", "manual"}
     if provider not in valid_providers:
-        return JSONResponse({"error": f"invalid provider {provider!r} — must be one of: anthropic, ollama, manual"}, status_code=400)
+        return JSONResponse({"error": f"invalid provider {provider!r} — must be one of: anthropic, openai, gemini, ollama, manual"}, status_code=400)
 
     logger_jl.info(f"→ /api/jobs/list page={page} per_page={per_page} search={search!r} status={status!r} score={score!r} provider={provider!r}")
 
@@ -397,6 +397,7 @@ async def analyze_job(
     job_id: int,
     resume_id: int = Form(...),
     provider: str = Form("anthropic"),
+    analysis_mode: str = Form(""),
     db: aiosqlite.Connection = Depends(get_db),
 ):
     try:
@@ -417,6 +418,10 @@ async def analyze_job(
 
     try:
         import time as _time
+        # Apply analysis_mode from form if provided, overriding env var for this request
+        _valid_modes = {"fast", "standard", "detailed"}
+        if analysis_mode and analysis_mode in _valid_modes:
+            os.environ["ANALYSIS_MODE"] = analysis_mode
         _start           = _time.monotonic()
         result           = await analyze_match(resume["content"], job["raw_description"], provider)
         duration_seconds = int(_time.monotonic() - _start)
@@ -683,6 +688,9 @@ if __name__ == "__main__":
         "host":              os.getenv("APP_HOST", "127.0.0.1"),
         "db_path":           os.getenv("DB_PATH", "job_matcher.db"),
         "anthropic_api_key": os.getenv("ANTHROPIC_API_KEY", ""),
+        "anthropic_model":   os.getenv("ANTHROPIC_MODEL", ""),
+        "openai_api_key":    os.getenv("OPENAI_API_KEY", ""),
+        "gemini_api_key":    os.getenv("GEMINI_API_KEY", ""),
         "ollama_base_url":   os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model":      os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         "ollama_timeout":    int(os.getenv("OLLAMA_TIMEOUT", "600")),
@@ -708,6 +716,9 @@ if __name__ == "__main__":
         os.environ["APP_HOST"]          = host
         os.environ["APP_PORT"]          = str(port)
         os.environ["ANTHROPIC_API_KEY"] = key
+        if m := cfg.get("anthropic_model", ""): os.environ["ANTHROPIC_MODEL"] = m
+        os.environ["OPENAI_API_KEY"]    = cfg.get("openai_api_key", "")
+        os.environ["GEMINI_API_KEY"]    = cfg.get("gemini_api_key", "")
         os.environ["OLLAMA_MODEL"]      = cfg.get("ollama_model", "llama3.1:8b")
         os.environ["OLLAMA_BASE_URL"]   = cfg.get("ollama_base_url", "http://localhost:11434")
         os.environ["OLLAMA_TIMEOUT"]    = str(cfg.get("ollama_timeout", 600))

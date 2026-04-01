@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from analyzer.config import anthropic_model
 from tests.mock_data import (
     MOCK_RESUME_DEVSECOPS,
     MOCK_JOB_DEVSECOPS,
@@ -62,7 +63,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
                 "score": 3, "adjusted_score": 3,
                 "penalty_breakdown": {"blockers": 0, "majors": 0, "minors": 0, "blocker_penalty": 0, "major_penalty": 0, "minor_penalty": 0, "count_penalty": 0, "total_penalty": 0},
                 "matched_skills": ["Python"], "missing_skills": [],
-                "reasoning": "Ok.", "llm_provider": "anthropic", "llm_model": "claude-opus-4-5",
+                "reasoning": "Ok.", "llm_provider": "anthropic", "llm_model": anthropic_model(),
             }
             await self.client.post(f"/api/jobs/{jid}/analyze", data={
                 "resume_id": rid, "provider": "anthropic"
@@ -168,7 +169,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
                 "matched_skills": ["Python", "Docker"],
                 "missing_skills": [{"skill": "Clearance", "severity": "blocker"}],
                 "reasoning": "Good match.",
-                "llm_provider": "anthropic", "llm_model": "claude-opus-4-5",
+                "llm_provider": "anthropic", "llm_model": anthropic_model(),
             }
             resp = await self.client.post(f"/api/jobs/{jid}/analyze", data={
                 "resume_id": rid, "provider": "anthropic"
@@ -267,7 +268,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
             "penalty_breakdown": {"blockers": 0, "majors": 0, "minors": 0, "blocker_penalty": 0, "major_penalty": 0, "minor_penalty": 0, "count_penalty": 0, "total_penalty": 0},
             "matched_skills": ["Python", "Docker", "AWS"],
             "missing_skills": [{"skill": "Secret Clearance", "severity": "blocker"}],
-            "reasoning": "Great match.", "llm_provider": "anthropic", "llm_model": "claude-opus-4-5",
+            "reasoning": "Great match.", "llm_provider": "anthropic", "llm_model": anthropic_model(),
         }
 
         r = await self.client.post("/api/resumes/add", data={
@@ -395,7 +396,7 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
             "matched_skills": ["Python", "Docker", "AWS", "Security+", "Splunk"],
             "missing_skills": [{"skill": "Active Secret Clearance", "severity": "blocker"}],
             "reasoning": "Excellent match for this DevSecOps federal role.",
-            "llm_provider": "anthropic", "llm_model": "claude-opus-4-5",
+            "llm_provider": "anthropic", "llm_model": anthropic_model(),
         }
 
         r = await self.client.post("/api/resumes/add", data={

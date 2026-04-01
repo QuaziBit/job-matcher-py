@@ -55,6 +55,24 @@ def check_anthropic(api_key: str) -> tuple[bool, str]:
     return True, f"Key present ({masked})"
 
 
+def check_openai(api_key: str) -> tuple[bool, str]:
+    """Check if the OpenAI API key looks valid (format check only, no API call)."""
+    if not api_key or api_key in ("sk-...", ""):
+        return False, "No API key set — OpenAI provider unavailable"
+    if not api_key.startswith("sk-"):
+        return False, "Key format looks wrong (should start with sk-)"
+    masked = api_key[:8] + "..." + api_key[-4:]
+    return True, f"Key present ({masked})"
+
+
+def check_gemini(api_key: str) -> tuple[bool, str]:
+    """Check if the Gemini API key is present (format check only, no API call)."""
+    if not api_key or api_key in ("AI...", ""):
+        return False, "No API key set — Gemini provider unavailable"
+    masked = api_key[:6] + "..." + api_key[-4:]
+    return True, f"Key present ({masked})"
+
+
 def run_health_checks() -> bool:
     """
     Run all startup checks and print a formatted report.
@@ -66,7 +84,9 @@ def run_health_checks() -> bool:
     db_path      = _db_path()
     ollama_url   = _ollama_base_url()
     ollama_model = _ollama_model()
-    api_key      = os.getenv("ANTHROPIC_API_KEY", "")
+    ant_key      = os.getenv("ANTHROPIC_API_KEY", "")
+    openai_key   = os.getenv("OPENAI_API_KEY", "")
+    gemini_key   = os.getenv("GEMINI_API_KEY", "")
 
     GREEN  = "\033[92m"
     RED    = "\033[91m"
@@ -93,15 +113,19 @@ def run_health_checks() -> bool:
 
     db_ok,     db_msg     = check_sqlite(db_path)
     ollama_ok, ollama_msg = check_ollama(ollama_url, ollama_model)
-    ant_ok,    ant_msg    = check_anthropic(api_key)
+    ant_ok,    ant_msg    = check_anthropic(ant_key)
+    openai_ok, openai_msg = check_openai(openai_key)
+    gemini_ok, gemini_msg = check_gemini(gemini_key)
 
     status_line("SQLite",        db_ok,     db_msg)
     status_line("Ollama",        ollama_ok, ollama_msg, warn_only=True)
     status_line("Anthropic API", ant_ok,    ant_msg,    warn_only=True)
+    status_line("OpenAI API",    openai_ok, openai_msg, warn_only=True)
+    status_line("Gemini API",    gemini_ok, gemini_msg, warn_only=True)
 
-    llm_ok = ollama_ok or ant_ok
+    llm_ok = ollama_ok or ant_ok or openai_ok or gemini_ok
     if not llm_ok:
-        print(f"\n  {RED}No LLM provider available. Configure Ollama or add ANTHROPIC_API_KEY.{RESET}")
+        print(f"\n  {RED}No LLM provider available. Configure Ollama or add an API key.{RESET}")
 
     print(f"\n  {'─' * 50}")
     print(f"  {BOLD}URL{RESET}    http://{host}:{port}")
@@ -112,7 +136,9 @@ def run_health_checks() -> bool:
 
 
 # ── Backward compat aliases ───────────────────────────────────────────────────
-_check_sqlite    = check_sqlite
-_check_ollama    = check_ollama
-_check_anthropic = check_anthropic
+_check_sqlite      = check_sqlite
+_check_ollama      = check_ollama
+_check_anthropic   = check_anthropic
+_check_openai      = check_openai
+_check_gemini      = check_gemini
 _run_health_checks = run_health_checks

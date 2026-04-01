@@ -7,6 +7,7 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from analyzer.config import anthropic_model
 from tests.mock_data import (
     run,
     MOCK_RESUME_DEVSECOPS,
@@ -255,7 +256,6 @@ class TestAnalyzeWithAnthropic(unittest.TestCase):
         mock_msg = MagicMock()
         mock_msg.content = [MagicMock(text=MOCK_LLM_RESPONSE_GOOD)]
         mock_client.messages.create.return_value = mock_msg
-
         from analyzer import analyze_with_anthropic
         run(analyze_with_anthropic("resume", "job"))
 
@@ -298,7 +298,7 @@ class TestAnalyzeMatchDispatch(unittest.TestCase):
     def test_routes_to_anthropic_by_default(self, mock_ollama, mock_anthropic):
         mock_anthropic.return_value = {
             "score": 4, "adjusted_score": 4, "llm_provider": "anthropic",
-            "llm_model": "claude-opus-4-5",
+            "llm_model": anthropic_model(),
             "matched_skills": [{"skill": "Python", "match_type": "exact",
                                  "jd_snippet": "Python required",
                                  "resume_snippet": "Python dev", "category": "backend"}],

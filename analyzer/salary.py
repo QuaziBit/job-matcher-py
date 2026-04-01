@@ -10,9 +10,22 @@ import re
 import anthropic
 import httpx
 
-from analyzer.config import ANTHROPIC_MODEL, ollama_base_url, ollama_model
+from analyzer.config import ANTHROPIC_MODEL, ollama_base_url, ollama_model, anthropic_model, openai_model, gemini_model
 
 logger = logging.getLogger("analyzer.salary")
+
+
+def _verbose() -> bool:
+    """Return True if SHOW_MORE_LOGS=true — enables extra salary call logging."""
+    return os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes")
+
+
+def _log_salary(msg: str) -> None:
+    """Log at info if SHOW_MORE_LOGS, otherwise debug."""
+    if _verbose():
+        logger.info(msg)
+    else:
+        logger.debug(msg)
 
 # ── Salary detection patterns ─────────────────────────────────────────────────
 
@@ -147,7 +160,8 @@ def _parse_salary_response(raw: str) -> dict:
 async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1) -> tuple:
     """
     Call the configured LLM for salary prompt.
-    Returns (raw_response, payload_or_client) for retry use.
+    Returns (raw_response, context) for retry use.
+    Supports: anthropic, openai, gemini, ollama.
     """
     if provider == "ollama":
         model   = ollama_model()
@@ -161,6 +175,7 @@ async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1)
             "stream":  False,
             "options": {"temperature": temperature, "num_predict": 400},
         }
+        logger.info(f"→ salary ollama request: model={model} temperature={temperature}")
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
                 resp = await client.post(f"{ollama_base_url()}/api/chat", json=payload)
@@ -172,20 +187,109 @@ async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1)
                 )
             except httpx.HTTPStatusError as e:
                 raise ValueError(f"Ollama error: {e.response.status_code} — {e.response.text}")
-        return resp.json()["message"]["content"], payload
+        resp_json   = resp.json()
+        raw         = resp_json["message"]["content"]
+        eval_count  = resp_json.get("eval_count", "?")
+        prompt_eval = resp_json.get("prompt_eval_count", "?")
+        logger.info(f"→ salary ollama response ({len(raw)} chars) prompt_tokens={prompt_eval} output_tokens={eval_count}")
+        _log_salary(f"→ salary ollama raw body:\n{raw[:400]}")
+        return raw, payload
 
-    else:  # anthropic
+    elif provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            raise ValueError("OpenAI API key is not set")
+        try:
+            from openai import AsyncOpenAI
+        except ImportError:
+            raise ValueError("openai package is not installed — run: pip install openai")
+        model  = openai_model()
+        logger.info(f"→ salary openai request: model={model} temperature={temperature}")
+        client = AsyncOpenAI(api_key=api_key)
+        response = await client.chat.completions.create(
+            model=model,
+            max_tokens=400,
+            temperature=temperature,
+            messages=[
+                {"role": "system", "content": "You are a compensation analyst. Always respond with valid JSON only."},
+                {"role": "user",   "content": prompt},
+            ],
+        )
+        raw = response.choices[0].message.content or ""
+        usage = response.usage
+        logger.info(
+            f"→ salary openai response ({len(raw)} chars) "
+            f"prompt_tokens={getattr(usage, 'prompt_tokens', '?')} "
+            f"completion_tokens={getattr(usage, 'completion_tokens', '?')}"
+        )
+        _log_salary(f"→ salary openai raw body:\n{raw[:400]}")
+        return raw, client
+
+    elif provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            raise ValueError("Gemini API key is not set")
+        try:
+            from google import genai
+            from google.genai import types as genai_types
+        except ImportError:
+            raise ValueError("google-genai package is not installed — run: pip install google-genai")
+        model = gemini_model()
+        logger.info(f"→ salary gemini request: model={model} temperature={temperature}")
+        client = genai.Client(api_key=api_key)
+        response = await client.aio.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction="You are a compensation analyst. Always respond with valid JSON only.",
+                # No max_output_tokens — thinking models consume tokens internally,
+                # capping at 400 starves the visible JSON output.
+                temperature=temperature,
+            ),
+        )
+        raw   = response.text or ""
+        usage = getattr(response, "usage_metadata", None)
+        logger.info(
+            f"→ salary gemini response ({len(raw)} chars) "
+            f"prompt_tokens={getattr(usage, 'prompt_token_count', '?') if usage else '?'} "
+            f"output_tokens={getattr(usage, 'candidates_token_count', '?') if usage else '?'}"
+        )
+        _log_salary(f"→ salary gemini raw body:\n{raw[:400]}")
+        return raw, client
+
+    else:  # anthropic (default)
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if not api_key:
             raise ValueError("Anthropic API key is not set")
+        _ant_model = anthropic_model()
+        logger.info(f"→ salary anthropic request: model={_ant_model} temperature={temperature}")
         client  = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
-            model=ANTHROPIC_MODEL,
+            model=_ant_model,
             max_tokens=400,
             system="You are a compensation analyst. Always respond with valid JSON only.",
             messages=[{"role": "user", "content": prompt}],
         )
-        return message.content[0].text, client
+        raw           = message.content[0].text
+        input_tokens  = getattr(message.usage, "input_tokens", "?")
+        output_tokens = getattr(message.usage, "output_tokens", "?")
+        logger.info(
+            f"→ salary anthropic response ({len(raw)} chars) "
+            f"input_tokens={input_tokens} output_tokens={output_tokens}"
+        )
+        _log_salary(f"→ salary anthropic raw body:\n{raw[:400]}")
+        return raw, client
+
+
+def _get_salary_model_name(provider: str) -> str:
+    """Return the model name string for a given provider."""
+    if provider == "openai":
+        return openai_model()
+    if provider == "gemini":
+        return gemini_model()
+    if provider == "ollama":
+        return ollama_model()
+    return anthropic_model()
 
 
 # ── Public functions ──────────────────────────────────────────────────────────
@@ -202,12 +306,13 @@ async def estimate_salary(
     Estimate salary for a job using the configured LLM provider.
     Returns a dict with min, max, currency, period, confidence, signals.
     Raises ValueError if the provider is unavailable or response is unparseable.
+    Supports: anthropic, openai, gemini, ollama.
     """
     if not _skip_salary_check and _job_has_salary(job_description):
         raise ValueError("Job description already contains salary information")
 
     prompt     = _build_salary_prompt(title, company, location, job_description)
-    model_name = ollama_model() if provider == "ollama" else ANTHROPIC_MODEL
+    model_name = _get_salary_model_name(provider)
 
     raw, ctx = await _call_salary_llm(prompt, provider, temperature=0.1)
 
@@ -245,6 +350,7 @@ async def extract_salary(
     """
     Extract explicitly posted salary from a job description.
     Returns same shape as estimate_salary but with source='posted'.
+    Supports: anthropic, openai, gemini, ollama.
     """
     prompt = "\n\n".join([
         "You are a compensation analyst. Extract the salary range explicitly stated in the job description below.",
@@ -270,7 +376,7 @@ async def extract_salary(
         ]),
     ])
 
-    model_name = ollama_model() if provider == "ollama" else ANTHROPIC_MODEL
+    model_name = _get_salary_model_name(provider)
     raw, ctx   = await _call_salary_llm(prompt, provider, temperature=0.0)
 
     for attempt in range(2):

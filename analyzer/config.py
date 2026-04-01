@@ -7,8 +7,18 @@ import os
 
 logger = logging.getLogger("analyzer.config")
 
-ANTHROPIC_MODEL = "claude-opus-4-5"
+_ANTHROPIC_MODEL_DEFAULT = "claude-opus-4-5"
+ANTHROPIC_MODEL = _ANTHROPIC_MODEL_DEFAULT  # kept for backward compat imports
+
+
+def anthropic_model() -> str:
+    return os.getenv("ANTHROPIC_MODEL", _ANTHROPIC_MODEL_DEFAULT)
+OPENAI_MODEL    = "gpt-4o-mini"
+GEMINI_MODEL    = "gemini-2.0-flash"
 MAX_RETRIES     = 3
+
+# All cloud providers that go through single-shot (not chunked) path
+CLOUD_PROVIDERS = {"anthropic", "openai", "gemini"}
 
 # ── Analysis mode configuration ───────────────────────────────────────────────
 
@@ -145,3 +155,11 @@ def ollama_base_url() -> str:
 
 def ollama_model() -> str:
     return os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+
+
+def openai_model() -> str:
+    return os.getenv("OPENAI_MODEL", OPENAI_MODEL)
+
+
+def gemini_model() -> str:
+    return os.getenv("GEMINI_MODEL", GEMINI_MODEL)

@@ -47,7 +47,7 @@ function applyLayout() {
 
 // Sync form values from vertical → horizontal when switching to horizontal
 function syncToHorizontal() {
-  const fields = ['port','host','db_path','anthropic_api_key','ollama_base_url','ollama_model','ollama_timeout'];
+  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout'];
   fields.forEach(id => {
     const src = $(id); const dst = $('h-' + id);
     if (src && dst) dst.value = src.value;
@@ -63,7 +63,7 @@ function syncToHorizontal() {
 
 // Sync form values from horizontal → vertical when switching to vertical
 function syncToVertical() {
-  const fields = ['port','host','db_path','anthropic_api_key','ollama_base_url','ollama_model','ollama_timeout'];
+  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout'];
   fields.forEach(id => {
     const src = $('h-' + id); const dst = $(id);
     if (src && dst) dst.value = src.value;
@@ -79,15 +79,19 @@ function syncToVertical() {
 function getFormValues() {
   if (isHorizontal) {
     return {
-      db_path:    ($('h-db_path')           || {value:''}).value,
-      ollama_url: ($('h-ollama_base_url')   || {value:''}).value,
-      api_key:    ($('h-anthropic_api_key') || {value:''}).value,
+      db_path:     ($('h-db_path')            || {value:''}).value,
+      ollama_url:  ($('h-ollama_base_url')    || {value:''}).value,
+      api_key:     ($('h-anthropic_api_key')  || {value:''}).value,
+      openai_key:  ($('h-openai_api_key')     || {value:''}).value,
+      gemini_key:  ($('h-gemini_api_key')     || {value:''}).value,
     };
   }
   return {
-    db_path:    ($('db_path')           || {value:''}).value,
-    ollama_url: ($('ollama_base_url')   || {value:''}).value,
-    api_key:    ($('anthropic_api_key') || {value:''}).value,
+    db_path:     ($('db_path')            || {value:''}).value,
+    ollama_url:  ($('ollama_base_url')    || {value:''}).value,
+    api_key:     ($('anthropic_api_key')  || {value:''}).value,
+    openai_key:  ($('openai_api_key')     || {value:''}).value,
+    gemini_key:  ($('gemini_api_key')     || {value:''}).value,
   };
 }
 
@@ -106,7 +110,7 @@ function updateHealthRow(id, result) {
 async function runHealthChecks() {
   log('runHealthChecks', 'running...');
   const v = getFormValues();
-  const params = new URLSearchParams({ db_path: v.db_path, ollama_url: v.ollama_url, api_key: v.api_key });
+  const params = new URLSearchParams({ db_path: v.db_path, ollama_url: v.ollama_url, api_key: v.api_key, openai_key: v.openai_key || '', gemini_key: v.gemini_key || '' });
   try {
     const res  = await fetch('/health?' + params);
     if (!res.ok) { logErr('runHealthChecks', 'HTTP ' + res.status); return; }
@@ -114,6 +118,8 @@ async function runHealthChecks() {
     updateHealthRow('health-sqlite',    data.sqlite);
     updateHealthRow('health-ollama',    data.ollama);
     updateHealthRow('health-anthropic', data.anthropic);
+    updateHealthRow('health-openai',    data.openai);
+    updateHealthRow('health-gemini',    data.gemini);
 
     // Update both vertical and horizontal model selects
     ['ollama_model', 'h-ollama_model'].forEach(selId => {
@@ -149,6 +155,8 @@ function buildFormData() {
   fd.append('host',              ($(pfx + 'host')              || {value:''}).value);
   fd.append('db_path',           ($(pfx + 'db_path')           || {value:''}).value);
   fd.append('anthropic_api_key', ($(pfx + 'anthropic_api_key') || {value:''}).value);
+  fd.append('openai_api_key',   ($(pfx + 'openai_api_key')   || {value:''}).value);
+  fd.append('gemini_api_key',   ($(pfx + 'gemini_api_key')   || {value:''}).value);
   fd.append('ollama_base_url',   ($(pfx + 'ollama_base_url')   || {value:''}).value);
   fd.append('ollama_model',      ($(pfx + 'ollama_model')      || {value:''}).value);
   fd.append('ollama_timeout',    ($(pfx + 'ollama_timeout')    || {value:''}).value);

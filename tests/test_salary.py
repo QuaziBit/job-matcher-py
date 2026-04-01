@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from analyzer.config import anthropic_model
 from tests.mock_data import (
     run,
     MOCK_JOB_NO_SALARY,
@@ -258,7 +259,7 @@ class TestSalaryAPIEndpoints(unittest.IsolatedAsyncioTestCase):
                 "min": 120000, "max": 150000, "currency": "USD",
                 "period": "annual", "confidence": "medium",
                 "signals": ["senior"], "llm_provider": "anthropic",
-                "llm_model": "claude-opus-4-5",
+                "llm_model": anthropic_model(),
             }
             r = await self.client.post(f"/api/jobs/{jid}/estimate-salary",
                                        data={"provider": "anthropic"})
@@ -299,7 +300,7 @@ class TestSalaryAPIEndpoints(unittest.IsolatedAsyncioTestCase):
                 "min": 130000, "max": 160000, "currency": "USD",
                 "period": "annual", "confidence": "high",
                 "signals": ["Salary: $130,000 - $160,000"], "source": "posted",
-                "llm_provider": "anthropic", "llm_model": "claude-opus-4-5",
+                "llm_provider": "anthropic", "llm_model": anthropic_model(),
             }
             r = await self.client.post(f"/api/jobs/{jid}/estimate-salary",
                                        data={"provider": "anthropic"})

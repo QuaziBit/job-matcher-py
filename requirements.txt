@@ -6,6 +6,7 @@ httpx==0.27.2
 beautifulsoup4==4.12.3
 anthropic==0.34.2
 openai==1.45.0
+google-genai>=1.0.0
 python-dotenv==1.0.1
 aiosqlite==0.20.0
 # pysqlite3-binary  — optional, Linux only

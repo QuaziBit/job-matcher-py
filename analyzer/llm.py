@@ -9,8 +9,10 @@ import anthropic
 import httpx
 
 from analyzer.config import (
-    ANTHROPIC_MODEL, MAX_RETRIES, MODE_CONFIG,
+    ANTHROPIC_MODEL, OPENAI_MODEL, GEMINI_MODEL,
+    CLOUD_PROVIDERS, MAX_RETRIES, MODE_CONFIG,
     get_mode_config, ollama_base_url, ollama_model,
+    anthropic_model, openai_model, gemini_model,
     cap_mode_for_model,
 )
 from analyzer.parsers import parse_response, repair_truncated_json, sanitize_json, _escape_control_chars
@@ -39,6 +41,16 @@ def _log_chunk(msg: str) -> None:
         logger.debug(msg)
 
 
+def _get_model_for_provider(provider: str) -> str:
+    """Return the configured model name for the given provider."""
+    if provider == "openai":
+        return openai_model()
+    if provider == "gemini":
+        return gemini_model()
+    if provider == "ollama":
+        return ollama_model()
+    return anthropic_model()
+
 
 # ── LLM call helpers ──────────────────────────────────────────────────────────
 
@@ -49,20 +61,132 @@ async def call_anthropic_once(resume: str, job_description: str) -> dict:
         raise ValueError(
             "analysis failed: Anthropic API key is not set — add it in the launcher or config.json"
         )
+    mode = os.getenv("ANALYSIS_MODE", "standard")
+    model = anthropic_model()
     system_prompt = build_system_prompt(cfg)
+    logger.info(
+        f"→ anthropic request: model={model} mode={mode} "
+        f"max_tokens={cfg['num_predict']} resume={len(resume)} chars jd={len(job_description)} chars"
+    )
     client  = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model=ANTHROPIC_MODEL,
+        model=model,
         max_tokens=cfg["num_predict"],
         system=system_prompt,
         messages=[{"role": "user", "content": build_user_prompt(resume, job_description)}],
     )
-    raw    = message.content[0].text
-    logger.debug(f"→ raw Anthropic response ({len(raw)} chars):\n{raw[:2000]}")
+    raw          = message.content[0].text
+    input_tokens = getattr(message.usage, "input_tokens", "?")
+    output_tokens = getattr(message.usage, "output_tokens", "?")
+    logger.info(
+        f"→ anthropic response ({len(raw)} chars) "
+        f"input_tokens={input_tokens} output_tokens={output_tokens}"
+    )
+    _log_chunk(f"→ anthropic raw body:\n{raw[:800]}")
     result = parse_response(raw, job_description, cfg)
     result["llm_provider"]  = "anthropic"
-    result["llm_model"]     = ANTHROPIC_MODEL
-    result["analysis_mode"] = os.getenv("ANALYSIS_MODE", "standard")
+    result["llm_model"]     = model
+    result["analysis_mode"] = mode
+    return result
+
+
+async def call_openai_once(resume: str, job_description: str) -> dict:
+    """Single-shot OpenAI Chat Completions call — same shape as call_anthropic_once."""
+    cfg = get_mode_config()
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        raise ValueError(
+            "analysis failed: OpenAI API key is not set — add OPENAI_API_KEY in the launcher"
+        )
+    model = openai_model()
+    system_prompt = build_system_prompt(cfg)
+    user_prompt   = build_user_prompt(resume, job_description)
+
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        raise ValueError("openai package is not installed — run: pip install openai")
+
+    mode = os.getenv("ANALYSIS_MODE", "standard")
+    logger.info(
+        f"→ openai request: model={model} mode={mode} "
+        f"max_tokens={cfg['num_predict']} resume={len(resume)} chars jd={len(job_description)} chars"
+    )
+    client = AsyncOpenAI(api_key=api_key)
+    response = await client.chat.completions.create(
+        model=model,
+        max_tokens=cfg["num_predict"],
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+    )
+    raw = response.choices[0].message.content or ""
+    usage = response.usage
+    input_tokens  = getattr(usage, "prompt_tokens", "?")
+    output_tokens = getattr(usage, "completion_tokens", "?")
+    logger.info(
+        f"→ openai response ({len(raw)} chars) "
+        f"prompt_tokens={input_tokens} completion_tokens={output_tokens}"
+    )
+    _log_chunk(f"→ openai raw body:\n{raw[:800]}")
+    result = parse_response(raw, job_description, cfg)
+    result["llm_provider"]  = "openai"
+    result["llm_model"]     = model
+    result["analysis_mode"] = mode
+    return result
+
+
+async def call_gemini_once(resume: str, job_description: str) -> dict:
+    """Single-shot Google Gemini call — same shape as call_anthropic_once."""
+    cfg = get_mode_config()
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        raise ValueError(
+            "analysis failed: Gemini API key is not set — add GEMINI_API_KEY in the launcher"
+        )
+    model = gemini_model()
+    system_prompt = build_system_prompt(cfg)
+    user_prompt   = build_user_prompt(resume, job_description)
+
+    try:
+        from google import genai
+        from google.genai import types as genai_types
+    except ImportError:
+        raise ValueError("google-genai package is not installed — run: pip install google-genai")
+
+    mode = os.getenv("ANALYSIS_MODE", "standard")
+    logger.info(
+        f"→ gemini request: model={model} mode={mode} "
+        f"resume={len(resume)} chars jd={len(job_description)} chars"
+    )
+    client = genai.Client(api_key=api_key)
+    response = await client.aio.models.generate_content(
+        model=model,
+        contents=user_prompt,
+        config=genai_types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            # Do not cap max_output_tokens for Gemini — thinking models
+            # (2.5 Flash etc.) consume tokens internally before visible output,
+            # so a hard cap starves the response. Let the model decide.
+            temperature=0.2,
+        ),
+    )
+    raw = response.text or ""
+    # Log token usage if available in response metadata
+    usage = getattr(response, "usage_metadata", None)
+    input_tokens  = getattr(usage, "prompt_token_count", "?") if usage else "?"
+    output_tokens = getattr(usage, "candidates_token_count", "?") if usage else "?"
+    logger.info(
+        f"→ gemini response ({len(raw)} chars) "
+        f"prompt_tokens={input_tokens} output_tokens={output_tokens}"
+    )
+    _log_chunk(f"→ gemini raw body:\n{raw[:800]}")
+    result = parse_response(raw, job_description, cfg)
+    result["llm_provider"]  = "gemini"
+    result["llm_model"]     = model
+    result["analysis_mode"] = mode
     return result
 
 
@@ -286,12 +410,9 @@ def _parse_chunk(raw: str | None, key: str, chunk_name: str) -> list | dict | No
     # only the complete items by finding the last valid closing brace
     # before the truncation point and closing the array/object there.
     try:
-        # Find the last complete '}' before the end of the string
         match = re.search(r"\{[^{]*\"" + key + r"\":\s*\[(.*)\]", cleaned, re.DOTALL)
         if match:
-            # Try to find partial array content and extract complete items
             array_content = match.group(1)
-            # Find last complete item (ends with })
             last_complete = array_content.rfind("}")
             if last_complete > 0:
                 truncated_fixed = '{"'  + key + '": [' + array_content[:last_complete + 1] + ']}'
@@ -450,7 +571,9 @@ async def call_ollama_chunked(resume: str, job_description: str) -> dict:
 
 async def analyze_match(resume: str, job_description: str, provider: str = "anthropic") -> dict:
     """
-    Entry point. provider = 'anthropic' | 'ollama'
+    Entry point. provider = 'anthropic' | 'openai' | 'gemini' | 'ollama'
+    Cloud providers (anthropic, openai, gemini) use single-shot calls.
+    Ollama uses chunked calls.
     Retries up to MAX_RETRIES times, validates output each attempt.
     Falls back to partial analysis if all retries fail.
     """
@@ -472,6 +595,10 @@ async def analyze_match(resume: str, job_description: str, provider: str = "anth
             import analyzer.llm as _self
             if provider == "ollama":
                 result = await _self.call_ollama_chunked(resume, job_description)
+            elif provider == "openai":
+                result = await _self.call_openai_once(resume, job_description)
+            elif provider == "gemini":
+                result = await _self.call_gemini_once(resume, job_description)
             else:
                 result = await _self.call_anthropic_once(resume, job_description)
         except Exception as e:
@@ -500,7 +627,7 @@ async def analyze_match(resume: str, job_description: str, provider: str = "anth
     fallback = partial_fallback_analysis()
     fallback["validation_errors"] = "; ".join(last_validation["errors"])
     fallback["llm_provider"] = provider
-    fallback["llm_model"]    = ollama_model() if provider == "ollama" else ANTHROPIC_MODEL
+    fallback["llm_model"]    = _get_model_for_provider(provider)
     return fallback
 
 
@@ -510,3 +637,5 @@ _call_ollama_once      = call_ollama_once
 _call_ollama_chunked   = call_ollama_chunked
 analyze_with_anthropic = call_anthropic_once
 analyze_with_ollama    = call_ollama_chunked
+analyze_with_openai    = call_openai_once
+analyze_with_gemini    = call_gemini_once

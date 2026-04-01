@@ -232,9 +232,13 @@ async function analyzeJob(jobId) {
 
   const provider    = providerInput ? providerInput.value : 'anthropic';
   const ollamaLabel = document.querySelector('label[for="p-ollama"]');
-  const model       = provider === 'ollama'
-    ? (ollamaLabel ? ollamaLabel.textContent.trim() : 'Ollama')
-    : 'claude-opus-4-5';
+  const _providerModelMap = {
+    'anthropic': 'claude-opus-4-5',
+    'openai':    'gpt-4o-mini',
+    'gemini':    'gemini-2.0-flash',
+    'ollama':    ollamaLabel ? ollamaLabel.textContent.trim() : 'Ollama',
+  };
+  const model = _providerModelMap[provider] || provider;
   const mode = btn ? (btn.dataset.mode || 'standard') : 'standard';
 
   btn.disabled    = true;
@@ -242,8 +246,9 @@ async function analyzeJob(jobId) {
   startProgress(provider, model, mode);
 
   const fd = new FormData();
-  fd.append('resume_id', resumeSelect.value);
-  fd.append('provider',  provider);
+  fd.append('resume_id',     resumeSelect.value);
+  fd.append('provider',      provider);
+  fd.append('analysis_mode', mode);
 
   try {
     log('analyzeJob', `POST /api/jobs/${jobId}/analyze`);

@@ -73,13 +73,34 @@ def check_anthropic(api_key: str) -> dict:
     return {"status": "ok", "message": f"Key present ({masked})"}
 
 
-def run_health_checks(db_path: str, ollama_url: str, api_key: str) -> dict:
+def check_openai(api_key: str) -> dict:
+    """Validate OpenAI API key format."""
+    if not api_key or api_key in ("sk-...", ""):
+        return {"status": "warn", "message": "No key set — OpenAI provider unavailable"}
+    if not api_key.startswith("sk-"):
+        return {"status": "error", "message": "Key format invalid (must start with sk-)"}
+    masked = api_key[:8] + "..." + api_key[-4:]
+    return {"status": "ok", "message": f"Key present ({masked})"}
+
+
+def check_gemini(api_key: str) -> dict:
+    """Validate Gemini API key presence."""
+    if not api_key or api_key in ("AI...", ""):
+        return {"status": "warn", "message": "No key set — Gemini provider unavailable"}
+    masked = api_key[:6] + "..." + api_key[-4:]
+    return {"status": "ok", "message": f"Key present ({masked})"}
+
+
+def run_health_checks(db_path: str, ollama_url: str, api_key: str,
+                      openai_key: str = "", gemini_key: str = "") -> dict:
     """Run all health checks and return a combined report."""
     ollama_result, models = check_ollama(ollama_url)
     return {
         "sqlite":    check_sqlite(db_path),
         "ollama":    ollama_result,
         "anthropic": check_anthropic(api_key),
+        "openai":    check_openai(openai_key),
+        "gemini":    check_gemini(gemini_key),
         "models":    models,
     }
 
@@ -100,6 +121,8 @@ def render_launcher_page(cfg: dict) -> str:
     host          = cfg.get("host", "127.0.0.1")
     db_path       = cfg.get("db_path", "job_matcher.db")
     api_key       = cfg.get("anthropic_api_key", "")
+    openai_key    = cfg.get("openai_api_key", "")
+    gemini_key    = cfg.get("gemini_api_key", "")
     ollama_url    = cfg.get("ollama_base_url", "http://localhost:11434")
     ollama_model  = cfg.get("ollama_model", "llama3.1:8b")
     ollama_timeout = cfg.get("ollama_timeout", 600)
@@ -114,6 +137,8 @@ def render_launcher_page(cfg: dict) -> str:
         host           = host,
         db_path        = db_path,
         api_key        = api_key,
+        openai_key     = openai_key,
+        gemini_key     = gemini_key,
         ollama_url     = ollama_url,
         ollama_model   = ollama_model,
         ollama_timeout = ollama_timeout,
@@ -210,9 +235,11 @@ class LauncherHandler(BaseHTTPRequestHandler):
             db_path    = query.get("db_path",    [""])[0] or self.launcher.cfg.get("db_path", "job_matcher.db")
             ollama_url = query.get("ollama_url",  [""])[0] or self.launcher.cfg.get("ollama_base_url", "http://localhost:11434")
             api_key    = query.get("api_key",     [""])[0] or self.launcher.cfg.get("anthropic_api_key", "")
+            openai_key = query.get("openai_key",  [""])[0] or self.launcher.cfg.get("openai_api_key", "")
+            gemini_key = query.get("gemini_key",  [""])[0] or self.launcher.cfg.get("gemini_api_key", "")
             logger.info(f"→ Launcher health: db={db_path} ollama={ollama_url} key_set={bool(api_key)}")
-            report = run_health_checks(db_path, ollama_url, api_key)
-            logger.info(f"✓ Health: sqlite={report['sqlite']['status']} ollama={report['ollama']['status']} anthropic={report['anthropic']['status']} models={len(report['models'])}")
+            report = run_health_checks(db_path, ollama_url, api_key, openai_key, gemini_key)
+            logger.info(f"✓ Health: sqlite={report['sqlite']['status']} ollama={report['ollama']['status']} anthropic={report['anthropic']['status']} openai={report['openai']['status']} gemini={report['gemini']['status']} models={len(report['models'])}")
             self.send_json(report)
 
         else:
@@ -249,6 +276,8 @@ class LauncherHandler(BaseHTTPRequestHandler):
         if v := form.get("host", ""):            cfg["host"] = v
         if v := form.get("db_path", ""):         cfg["db_path"] = v
         if v := form.get("anthropic_api_key",""):cfg["anthropic_api_key"] = v
+        if v := form.get("openai_api_key",   ""):cfg["openai_api_key"]   = v
+        if v := form.get("gemini_api_key",   ""):cfg["gemini_api_key"]   = v
         if v := form.get("ollama_base_url", ""):  cfg["ollama_base_url"] = v
         if v := form.get("ollama_model", ""):    cfg["ollama_model"] = v
         if v := form.get("ollama_timeout", ""):
@@ -337,6 +366,9 @@ class Launcher:
 
             updates = {
                 "ANTHROPIC_API_KEY": cfg.get("anthropic_api_key", ""),
+                "ANTHROPIC_MODEL":   cfg.get("anthropic_model", ""),
+                "OPENAI_API_KEY":    cfg.get("openai_api_key", ""),
+                "GEMINI_API_KEY":    cfg.get("gemini_api_key", ""),
                 "OLLAMA_BASE_URL":   cfg.get("ollama_base_url", "http://localhost:11434"),
                 "OLLAMA_MODEL":      cfg.get("ollama_model", "llama3.1:8b"),
                 "OLLAMA_TIMEOUT":    str(cfg.get("ollama_timeout", 600)),
