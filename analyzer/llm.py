@@ -511,8 +511,10 @@ async def call_ollama_chunked(resume: str, job_description: str) -> dict:
     logger.info(f"→ chunk 1 OK: score={score}")
 
     # ── Chunk 2: matched_skills ───────────────────────────────────────────────
+    # detailed mode requests up to 15 skills with full snippets — needs more tokens
+    chunk2_predict = 1400 if actual_mode == "detailed" else 800
     sys2    = build_chunk2_prompt(cfg, actual_mode)
-    raw2    = await _call_chunk(sys2, user_prompt, model, num_predict=800, chunk_name="2/matched")
+    raw2    = await _call_chunk(sys2, user_prompt, model, num_predict=chunk2_predict, chunk_name="2/matched")
     matched = _parse_chunk(raw2, "matched_skills", "2/matched") or []
     logger.info(f"→ chunk 2 OK: {len(matched)} matched skills")
 
