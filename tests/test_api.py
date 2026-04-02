@@ -121,6 +121,41 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["title"], "DevSecOps Engineer")
         self.assertEqual(data["company"], "Acme Federal")
 
+    async def test_add_manual_job_with_location(self):
+        """Location field should be saved and appear on the job detail page."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title":       "Cloud Engineer",
+            "company":     "Acme",
+            "location":    "Washington, DC",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 200)
+        jid = resp.json()["job_id"]
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT location FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertEqual(row["location"], "Washington, DC")
+
+    async def test_add_manual_job_location_defaults_to_empty(self):
+        """Omitting location should store empty string, not error."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title":       "Dev",
+            "company":     "Co",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 200)
+        jid = resp.json()["job_id"]
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT location FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertEqual(row["location"], "")
+
     async def test_add_manual_job_title_defaults_to_untitled(self):
         resp = await self.client.post("/api/jobs/add-manual", data={
             "title":       "",
@@ -243,6 +278,115 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         resp = await self.client.post("/api/jobs/add", data={"url": "https://bad.example.com"})
         self.assertEqual(resp.status_code, 422)
         self.assertIn("error", resp.json())
+
+    # ── /api/jobs/scrape ──────────────────────────────────────────────────────
+
+    @patch("main.scrape_job")
+    async def test_scrape_returns_data_without_saving(self, mock_scrape):
+        """POST /api/jobs/scrape should return scraped data but NOT save to DB."""
+        mock_scrape.return_value = {
+            "title": "Python Dev", "company": "Acme", "location": "Remote",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        resp = await self.client.post("/api/jobs/scrape", data={"url": "https://example.com/scrape-only"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["title"], "Python Dev")
+        self.assertIn("description", data)
+        self.assertIn("has_warnings", data)
+        self.assertIn("blocker_keywords", data)
+        self.assertIn("text_quality", data)
+        self.assertNotIn("job_id", data)
+
+    @patch("main.scrape_job")
+    async def test_scrape_duplicate_returns_409(self, mock_scrape):
+        """Scraping an already-saved URL should return 409."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "", "location": "",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        await self.client.post("/api/jobs/add", data={"url": "https://example.com/scrape-dupe"})
+        resp = await self.client.post("/api/jobs/scrape", data={"url": "https://example.com/scrape-dupe"})
+        self.assertEqual(resp.status_code, 409)
+
+    @patch("main.scrape_job")
+    async def test_scrape_failure_returns_422(self, mock_scrape):
+        mock_scrape.side_effect = ValueError("Could not extract content.")
+        resp = await self.client.post("/api/jobs/scrape", data={"url": "https://bad.example.com/scrape"})
+        self.assertEqual(resp.status_code, 422)
+
+    @patch("main.scrape_job")
+    async def test_scrape_detects_blocker_keywords(self, mock_scrape):
+        """Scrape endpoint should flag clearance keywords in warnings."""
+        mock_scrape.return_value = {
+            "title": "Gov Dev", "company": "Agency", "location": "DC",
+            "raw_description": "This role requires active Secret clearance and US citizenship.",
+        }
+        resp = await self.client.post("/api/jobs/scrape", data={"url": "https://example.com/clearance-job"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["has_warnings"])
+        self.assertGreater(len(data["blocker_keywords"]), 0)
+
+    # ── /api/jobs/save-preview ─────────────────────────────────────────────────
+
+    async def test_save_preview_creates_job(self):
+        """POST /api/jobs/save-preview should save job and return job_id."""
+        resp = await self.client.post("/api/jobs/save-preview", data={
+            "url":         "https://example.com/preview-save",
+            "title":       "Cleaned Up Dev",
+            "company":     "Acme",
+            "location":    "Remote",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("job_id", data)
+        self.assertEqual(data["title"], "Cleaned Up Dev")
+
+    async def test_save_preview_duplicate_returns_409(self):
+        url = "https://example.com/preview-dupe"
+        await self.client.post("/api/jobs/save-preview", data={
+            "url": url, "title": "Job", "company": "", "location": "",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        resp = await self.client.post("/api/jobs/save-preview", data={
+            "url": url, "title": "Job", "company": "", "location": "",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 409)
+
+    async def test_save_preview_short_description_returns_422(self):
+        resp = await self.client.post("/api/jobs/save-preview", data={
+            "url": "https://example.com/preview-short",
+            "title": "Dev", "company": "", "location": "",
+            "description": "Too short.",
+        })
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("too short", resp.json()["error"])
+
+    async def test_save_preview_job_accessible_after_save(self):
+        """Job saved via save-preview should be accessible on its detail page."""
+        resp = await self.client.post("/api/jobs/save-preview", data={
+            "url":         "https://example.com/preview-accessible",
+            "title":       "Accessible Job",
+            "company":     "Co",
+            "location":    "NY",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+        page = await self.client.get(f"/job/{jid}")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(b"Accessible Job", page.content)
+
+    # ── GET /jobs/preview ──────────────────────────────────────────────────────
+
+    async def test_preview_page_renders(self):
+        """GET /jobs/preview should return 200 with the preview form."""
+        resp = await self.client.get("/jobs/preview")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"Preview Job", resp.content)
+        self.assertIn(b"preview-form", resp.content)
 
     @patch("main.scrape_job")
     async def test_delete_job(self, mock_scrape):

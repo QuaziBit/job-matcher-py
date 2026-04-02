@@ -90,13 +90,14 @@ async function addJob(e) {
   fd.append("url", url);
 
   try {
-    log("addJob", "POST /api/jobs/add");
-    const res  = await fetch("/api/jobs/add", { method: "POST", body: fd });
+    log("addJob", "POST /api/jobs/scrape");
+    const res  = await fetch("/api/jobs/scrape", { method: "POST", body: fd });
     const data = await res.json();
     log("addJob", `response status=${res.status}`, data);
 
     if (res.status === 409) {
-      toast("Job already added — " + (data.title || url), "info");
+      toast("Job already added", "info");
+      if (data.job_id) setTimeout(() => window.location.href = "/job/" + data.job_id, 600);
       btn.disabled = false; btn.textContent = "Add Job";
       return;
     }
@@ -107,11 +108,9 @@ async function addJob(e) {
       return;
     }
 
-    log("addJob", `success id=${data.job_id} title="${data.title}"`);
-    toast(`✓ Added: ${data.title || url}`, "success");
-    input.value = "";
-    btn.disabled = false; btn.textContent = "Add Job";
-    setTimeout(() => location.reload(), 800);
+    // Store scraped data in sessionStorage and redirect to preview page
+    sessionStorage.setItem("job_preview", JSON.stringify(data));
+    window.location.href = "/jobs/preview";
   } catch(err) {
     logErr("addJob", "fetch threw:", err);
     toast("Network error", "error");
@@ -126,10 +125,11 @@ async function addJobManual() {
   log("addJobManual", "called");
   const title       = document.getElementById("paste-title").value.trim();
   const company     = document.getElementById("paste-company").value.trim();
+  const location    = (document.getElementById("paste-location") || {value:""}).value.trim();
   const description = document.getElementById("paste-description").value.trim();
   const btn         = document.getElementById("paste-submit-btn");
 
-  log("addJobManual", `title="${title}" company="${company}" desc_len=${description.length}`);
+  log("addJobManual", `title="${title}" company="${company}" location="${location}" desc_len=${description.length}`);
   if (!description) { toast("Please paste a job description", "error"); return; }
   if (description.length < 50) { toast("Description too short (min 50 chars)", "error"); return; }
 
@@ -139,6 +139,7 @@ async function addJobManual() {
   const fd = new FormData();
   fd.append("title",       title);
   fd.append("company",     company);
+  fd.append("location",    location);
   fd.append("description", description);
 
   try {
@@ -161,11 +162,7 @@ async function addJobManual() {
 
     log("addJobManual", `success id=${data.job_id}`);
     toast(`✓ Added: ${data.title}`, "success");
-    document.getElementById("paste-title").value       = "";
-    document.getElementById("paste-company").value     = "";
-    document.getElementById("paste-description").value = "";
-    btn.disabled = false; btn.textContent = "Add Job";
-    setTimeout(() => location.reload(), 800);
+    setTimeout(() => window.location.href = "/job/" + data.job_id, 600);
   } catch(err) {
     logErr("addJobManual", "fetch threw:", err);
     toast("Network error", "error");

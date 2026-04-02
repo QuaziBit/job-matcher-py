@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 import aiosqlite
 from database import get_db, init_db
 from scraper import scrape_job, assess_job_text_quality
-from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model
+from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model, BLOCKER_KEYWORDS
 from analyzer.config import anthropic_model, openai_model, gemini_model
 from analyzer.known_models import KNOWN_MODELS
 from health import run_health_checks
@@ -311,6 +311,119 @@ async def jobs_list(
     })
 
 
+@app.get("/jobs/preview", response_class=HTMLResponse)
+async def job_preview_page(request: Request, url: str = ""):
+    """Render the job preview page (no DB access — just the template shell)."""
+    return templates.TemplateResponse("job_preview.html", {
+        "request":      request,
+        "active_page":  "jobs",
+        "url":          "",
+        "title":        "",
+        "company":      "",
+        "location":     "",
+        "description":  "",
+        "warnings":     False,
+        "blocker_keywords": [],
+        "text_quality": None,
+    })
+
+
+@app.post("/api/jobs/scrape")
+async def scrape_job_preview(url: str = Form(...), db: aiosqlite.Connection = Depends(get_db)):
+    """Scrape a URL and return data + warnings — does NOT save to DB."""
+    url = url.strip()
+
+    try:
+        async with db.execute("SELECT id FROM jobs WHERE url = ?", (url,)) as cur:
+            existing = await cur.fetchone()
+    except Exception as e:
+        logger.error(f"✗ scrape_job_preview DB error checking duplicate: {e}")
+        return JSONResponse({"error": "Database error."}, status_code=500)
+
+    if existing:
+        return JSONResponse(
+            {"error": "This URL has already been added.", "job_id": existing[0]},
+            status_code=409,
+        )
+
+    try:
+        data = await scrape_job(url)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except Exception as e:
+        logger.error(f"✗ scrape_job_preview unexpected error: {e}")
+        return JSONResponse({"error": "Unexpected error while scraping."}, status_code=500)
+
+    description = clean_text(data["raw_description"])
+
+    # Run warnings on the scraped text
+    text_quality    = assess_job_text_quality(description)
+    desc_lower      = description.lower()
+    blocker_found   = [kw for kw in BLOCKER_KEYWORDS if kw in desc_lower]
+    has_warnings    = bool(blocker_found) or text_quality["level"] != "ok"
+
+    return JSONResponse({
+        "url":             url,
+        "title":           data["title"],
+        "company":         data["company"],
+        "location":        data["location"],
+        "description":     description,
+        "blocker_keywords": blocker_found,
+        "text_quality":    text_quality,
+        "has_warnings":    has_warnings,
+    })
+
+
+@app.post("/api/jobs/save-preview")
+async def save_job_preview(
+    url:         str = Form(...),
+    title:       str = Form(""),
+    company:     str = Form(""),
+    location:    str = Form(""),
+    description: str = Form(...),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Save a (possibly edited) scraped job to the DB."""
+    url         = url.strip()
+    title       = title.strip()
+    company     = company.strip()
+    location    = location.strip()
+    description = clean_text(description.strip())
+
+    if len(description) < 50:
+        return JSONResponse({"error": "Description is too short (minimum 50 characters)."}, status_code=422)
+
+    try:
+        async with db.execute("SELECT id FROM jobs WHERE url = ?", (url,)) as cur:
+            existing = await cur.fetchone()
+    except Exception as e:
+        logger.error(f"✗ save_job_preview DB error checking duplicate: {e}")
+        return JSONResponse({"error": "Database error."}, status_code=500)
+
+    if existing:
+        return JSONResponse(
+            {"error": "This URL has already been added.", "job_id": existing[0]},
+            status_code=409,
+        )
+
+    if len(description) > 8000:
+        description = description[:8000] + "\n\n[...truncated for analysis]"
+
+    try:
+        async with db.execute(
+            "INSERT INTO jobs (url, title, company, location, raw_description) VALUES (?, ?, ?, ?, ?)",
+            (url, title, company, location, description),
+        ) as cur:
+            job_id = cur.lastrowid
+        await db.commit()
+    except Exception as e:
+        logger.error(f"✗ save_job_preview DB insert error: {e}")
+        return JSONResponse({"error": "Failed to save job."}, status_code=500)
+
+    logger.info(f"✓ save_job_preview: job {job_id} saved ({len(description)} chars)")
+    return JSONResponse({"job_id": job_id, "title": title, "company": company})
+
+
 @app.post("/api/jobs/add")
 async def add_job(url: str = Form(...), db: aiosqlite.Connection = Depends(get_db)):
     """Scrape a job URL and store it."""
@@ -352,6 +465,7 @@ async def add_job(url: str = Form(...), db: aiosqlite.Connection = Depends(get_d
 async def add_job_manual(
     title: str = Form(""),
     company: str = Form(""),
+    location: str = Form(""),
     description: str = Form(...),
     db: aiosqlite.Connection = Depends(get_db),
 ):
@@ -389,7 +503,7 @@ async def add_job_manual(
     try:
         async with db.execute(
             "INSERT INTO jobs (url, title, company, location, raw_description) VALUES (?, ?, ?, ?, ?)",
-            (synthetic_url, title, company, "", description),
+            (synthetic_url, title, company, location.strip(), description),
         ) as cur:
             job_id = cur.lastrowid
         await db.commit()
