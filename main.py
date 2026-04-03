@@ -189,10 +189,13 @@ async def jobs_list(
     db: aiosqlite.Connection = Depends(get_db),
     page:     int = 1,
     per_page: int = 25,
-    search:   str = "",
-    status:   str = "",
-    score:    str = "",
-    provider: str = "",
+    search:     str = "",
+    status:     str = "",
+    score:      str = "",
+    provider:   str = "",
+    added_days: str = "",
+    date_from:  str = "",
+    date_to:    str = "",
 ):
     logger_jl = logging.getLogger("jobs_list")
 
@@ -213,7 +216,7 @@ async def jobs_list(
     if provider not in valid_providers:
         return JSONResponse({"error": f"invalid provider {provider!r} — must be one of: anthropic, openai, gemini, ollama, manual"}, status_code=400)
 
-    logger_jl.info(f"→ /api/jobs/list page={page} per_page={per_page} search={search!r} status={status!r} score={score!r} provider={provider!r}")
+    logger_jl.info(f"→ /api/jobs/list page={page} per_page={per_page} search={search!r} status={status!r} score={score!r} provider={provider!r} added_days={added_days!r} date_from={date_from!r} date_to={date_to!r}")
 
     where = []
     args  = []
@@ -256,6 +259,23 @@ async def jobs_list(
                 "(SELECT score FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1), 0) >= ?"
             )
             args.append(min_score)
+
+    # Simple date filter (added_days)
+    if added_days:
+        try:
+            days = int(added_days)
+            where.append("j.scraped_at >= datetime('now', ? || ' days')")
+            args.append(f"-{days}")
+        except ValueError:
+            pass
+
+    # Advanced date range filter
+    if date_from:
+        where.append("date(j.scraped_at) >= ?")
+        args.append(date_from)
+    if date_to:
+        where.append("date(j.scraped_at) <= ?")
+        args.append(date_to)
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 

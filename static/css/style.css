@@ -324,6 +324,11 @@ label {
   opacity: 0.6;
   color: var(--text-mute);
 }
+.date-tag {
+  font-size: 11px;
+  opacity: 0.5;
+  color: var(--text-mute);
+}
 .location-code {
   display: inline-block;
   font-family: var(--font-mono);
@@ -619,6 +624,19 @@ label {
   cursor: pointer;
 }
 .filter-bar select:focus { border-color: var(--amber); }
+.filter-bar input[type="date"] {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  outline: none;
+  cursor: pointer;
+  color-scheme: dark;
+}
+.filter-bar input[type="date"]:focus { border-color: var(--amber); }
 
 /* ── Pagination bar ──────────────────────────────────────────────────────── */
 .pagination-bar {

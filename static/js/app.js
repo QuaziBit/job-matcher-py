@@ -64,6 +64,19 @@ function getLocationFlag(location) {
 }
 
 
+// ── Date formatting ──────────────────────────────────────────────────────────
+function formatJobDate(dateStr) {
+  if (!dateStr) return '';
+  const date    = new Date(dateStr.replace(' ', 'T') + 'Z');
+  const now     = new Date();
+  const sameYear = date.getFullYear() === now.getFullYear();
+  const opts    = sameYear
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' };
+  return date.toLocaleDateString('en-US', opts);
+}
+
+
 // ── Logging helpers ───────────────────────────────────────────────────────────
 
 function log(fn, msg, ...args)    { console.log(`[${fn}]`, msg, ...args); }
@@ -645,6 +658,12 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   updateProviderModelRow();
 
+  // Wire advanced date inputs
+  ['filter-date-from', 'filter-date-to'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', applyFilters);
+  });
+
   const addJobForm = document.getElementById("add-job-form");
   if (addJobForm) {
     log("init", "binding #add-job-form submit");
@@ -672,14 +691,51 @@ let _searchTimer = null;
 
 // ── Fetch jobs ────────────────────────────────────────────────────────────────
 
+// ── Date filter mode toggle ───────────────────────────────────────────────────
+
+let _dateMode = 'simple'; // 'simple' | 'advanced'
+
+function toggleDateMode() {
+  _dateMode = _dateMode === 'simple' ? 'advanced' : 'simple';
+  const simple = document.getElementById('filter-date');
+  const fromEl = document.getElementById('filter-date-from');
+  const toEl   = document.getElementById('filter-date-to');
+  const sep    = document.getElementById('date-range-sep');
+  const btn    = document.getElementById('date-mode-btn');
+  if (_dateMode === 'advanced') {
+    if (simple) simple.style.display = 'none';
+    if (fromEl) fromEl.style.display = '';
+    if (toEl)   toEl.style.display   = '';
+    if (sep)    sep.style.display    = '';
+    if (btn)  { btn.title = 'Switch to simple mode'; btn.textContent = '✕ range'; }
+    if (simple) simple.value = '';
+  } else {
+    if (simple) simple.style.display = '';
+    if (fromEl) fromEl.style.display = 'none';
+    if (toEl)   toEl.style.display   = 'none';
+    if (sep)    sep.style.display    = 'none';
+    if (btn)  { btn.title = 'Switch to date range mode'; btn.textContent = '⋯'; }
+    if (fromEl) fromEl.value = '';
+    if (toEl)   toEl.value   = '';
+  }
+  applyFilters();
+}
+
+
 async function fetchJobs() {
-  const search   = (document.getElementById('filter-search')   || {value:''}).value.trim();
+  const search    = (document.getElementById('filter-search')   || {value:''}).value.trim();
+  const addedDays  = (document.getElementById('filter-date')      || {value:''}).value;
+  const dateFrom   = (document.getElementById('filter-date-from') || {value:''}).value;
+  const dateTo     = (document.getElementById('filter-date-to')   || {value:''}).value;
   const status   = (document.getElementById('filter-status')   || {value:''}).value;
   const score    = (document.getElementById('filter-score')    || {value:''}).value;
   const provider = (document.getElementById('filter-provider') || {value:''}).value;
 
   const params = new URLSearchParams({ page: _currentPage, per_page: _perPage });
-  if (search)   params.set('search',   search);
+  if (search)    params.set('search',    search);
+  if (addedDays) params.set('added_days', addedDays);
+  if (dateFrom)  params.set('date_from',  dateFrom);
+  if (dateTo)    params.set('date_to',    dateTo);
   if (status)   params.set('status',   status);
   if (score)    params.set('score',    score);
   if (provider) params.set('provider', provider);
@@ -688,7 +744,7 @@ async function fetchJobs() {
   history.pushState({}, '', newURL);
 
   const clearBtn = document.getElementById('clear-btn');
-  if (clearBtn) clearBtn.style.display = (search || status || score || provider) ? 'inline-flex' : 'none';
+  if (clearBtn) clearBtn.style.display = (search || status || score || provider || addedDays || dateFrom || dateTo) ? 'inline-flex' : 'none';
 
   log('fetchJobs', `page=${_currentPage} per_page=${_perPage} search=${search} status=${status} score=${score} provider=${provider}`);
   showLoading(true);
@@ -793,7 +849,8 @@ function renderJobs(data) {
         ? `<span class="location-tag" title="${location}"><span class="location-code">${locationFlag}</span> ${location}</span>`
         : '';
     const metaBase    = company || (isManual ? 'pasted description' : (job.url || '').substring(0, 60) + '…');
-    const metaParts   = [metaBase, locationBadge, recruiterBadge].filter(Boolean);
+    const dateLabel   = job.scraped_at ? `<span class="date-tag">added ${formatJobDate(job.scraped_at)}</span>` : '';
+    const metaParts   = [metaBase, locationBadge, dateLabel, recruiterBadge].filter(Boolean);
     const meta        = metaParts.join(' · ');
 
     return `<a href="/job/${job.id}" class="job-item" style="text-decoration:none;">
@@ -884,7 +941,8 @@ function showError(msg) {
 }
 
 function hasActiveFilter() {
-  return ['filter-search', 'filter-status', 'filter-score', 'filter-provider']
+  return ['filter-search', 'filter-status', 'filter-score', 'filter-provider',
+          'filter-date', 'filter-date-from', 'filter-date-to']
     .some(id => { const el = document.getElementById(id); return el && el.value !== ''; });
 }
 
@@ -918,7 +976,8 @@ function changePerPage() {
 }
 
 function clearFilters() {
-  ['filter-search', 'filter-status', 'filter-score', 'filter-provider'].forEach(id => {
+  ['filter-search', 'filter-status', 'filter-score', 'filter-provider',
+   'filter-date', 'filter-date-from', 'filter-date-to'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
   applyFilters();
@@ -986,6 +1045,14 @@ function restoreFromURL() {
   setEl('filter-status',   getValue('status'));
   setEl('filter-score',    getValue('score'));
   setEl('filter-provider', getValue('provider'));
+  setEl('filter-date',     getValue('added_days'));
+  setEl('filter-date-from', getValue('date_from'));
+  setEl('filter-date-to',   getValue('date_to'));
+  // Restore date mode if advanced params present
+  if (getValue('date_from') || getValue('date_to')) {
+    _dateMode = 'simple'; // reset so toggle switches to advanced
+    toggleDateMode();
+  }
 
   if (hasPageParams) {
     _currentPage = parseInt(params.get('page')) || 1;
@@ -1012,7 +1079,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchEl = document.getElementById('filter-search');
   if (searchEl) searchEl.addEventListener('input', () => { applyFiltersDebounced(); updateSearchClearBtn(); });
 
-  ['filter-status', 'filter-score', 'filter-provider'].forEach(id => {
+  ['filter-status', 'filter-score', 'filter-provider', 'filter-date'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', applyFilters);
   });

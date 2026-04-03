@@ -684,6 +684,116 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         job = next((j for j in jobs if j["id"] == jid), None)
         self.assertEqual(job["has_recruiter"], 0)
 
+    # ── date filter and scraped_at ───────────────────────────────────────────
+
+    @patch("main.scrape_job")
+    async def test_job_list_returns_scraped_at(self, mock_scrape):
+        """Job list should include scraped_at timestamp for each job."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/date-test"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get("/api/jobs/list")
+        jobs = resp.json()["jobs"]
+        job = next((j for j in jobs if j["id"] == jid), None)
+        self.assertIsNotNone(job)
+        self.assertIn("scraped_at", job)
+        self.assertIsNotNone(job["scraped_at"])
+
+    @patch("main.scrape_job")
+    async def test_added_days_filter_includes_recent_job(self, mock_scrape):
+        """Jobs added within the filter window should be returned."""
+        mock_scrape.return_value = {
+            "title": "Recent Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/recent-job"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get("/api/jobs/list?added_days=7")
+        jobs = resp.json()["jobs"]
+        ids = [j["id"] for j in jobs]
+        self.assertIn(jid, ids)
+
+    @patch("main.scrape_job")
+    async def test_date_from_filter_includes_recent_job(self, mock_scrape):
+        """Jobs added on or after date_from should be returned."""
+        from datetime import date
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/date-from-test"})
+        jid = j.json()["job_id"]
+
+        today = date.today().isoformat()
+        resp = await self.client.get(f"/api/jobs/list?date_from={today}")
+        ids = [j["id"] for j in resp.json()["jobs"]]
+        self.assertIn(jid, ids)
+
+    @patch("main.scrape_job")
+    async def test_date_to_filter_includes_recent_job(self, mock_scrape):
+        """Jobs added on or before date_to should be returned."""
+        from datetime import date, timedelta
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/date-to-test"})
+        jid = j.json()["job_id"]
+
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        resp = await self.client.get(f"/api/jobs/list?date_to={tomorrow}")
+        ids = [j["id"] for j in resp.json()["jobs"]]
+        self.assertIn(jid, ids)
+
+    @patch("main.scrape_job")
+    async def test_date_range_filter(self, mock_scrape):
+        """Jobs within date_from/date_to range should be returned."""
+        from datetime import date, timedelta
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/date-range-test"})
+        jid = j.json()["job_id"]
+
+        today    = date.today().isoformat()
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        resp = await self.client.get(f"/api/jobs/list?date_from={today}&date_to={tomorrow}")
+        ids = [j["id"] for j in resp.json()["jobs"]]
+        self.assertIn(jid, ids)
+
+    @patch("main.scrape_job")
+    async def test_date_from_future_returns_empty(self, mock_scrape):
+        """date_from in the future should return no jobs."""
+        from datetime import date, timedelta
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        await self.client.post("/api/jobs/add", data={"url": "https://example.com/future-date-test"})
+
+        future = (date.today() + timedelta(days=30)).isoformat()
+        resp = await self.client.get(f"/api/jobs/list?date_from={future}")
+        self.assertEqual(resp.json()["total"], 0)
+
+    @patch("main.scrape_job")
+    async def test_added_days_invalid_value_ignored(self, mock_scrape):
+        """Invalid added_days value should be ignored, returning all jobs."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        await self.client.post("/api/jobs/add", data={"url": "https://example.com/invalid-date"})
+
+        resp = await self.client.get("/api/jobs/list?added_days=notanumber")
+        self.assertEqual(resp.status_code, 200)
+        self.assertGreater(resp.json()["total"], 0)
+
     # ── last_model in job list ────────────────────────────────────────────────
 
     @patch("main.scrape_job")
