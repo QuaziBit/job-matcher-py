@@ -684,6 +684,127 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         job = next((j for j in jobs if j["id"] == jid), None)
         self.assertEqual(job["has_recruiter"], 0)
 
+    # ── last_model in job list ────────────────────────────────────────────────
+
+    @patch("main.scrape_job")
+    @patch("main.analyze_match")
+    async def test_job_list_last_model_none_before_analysis(self, mock_analyze, mock_scrape):
+        """Job with no analysis should have last_model=None in list."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/no-analysis-model"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get("/api/jobs/list")
+        jobs = resp.json()["jobs"]
+        job = next((j for j in jobs if j["id"] == jid), None)
+        self.assertIsNotNone(job)
+        self.assertIsNone(job["last_model"])
+
+    @patch("main.scrape_job")
+    @patch("main.analyze_match")
+    async def test_job_list_last_model_after_analysis(self, mock_analyze, mock_scrape):
+        """Job list should return last_model from most recent analysis."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        mock_analyze.return_value = {
+            "score": 4, "adjusted_score": 4,
+            "penalty_breakdown": {"blockers":0,"majors":0,"minors":0,"blocker_penalty":0,"major_penalty":0,"minor_penalty":0,"count_penalty":0,"total_penalty":0},
+            "matched_skills": ["Python"], "missing_skills": [],
+            "reasoning": "ok.", "llm_provider": "openai", "llm_model": "gpt-4o-mini",
+        }
+        r = await self.client.post("/api/resumes/add", data={
+            "label": "v1", "content": MOCK_RESUME_DEVSECOPS
+        })
+        rid = r.json()["resume_id"]
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/with-model"})
+        jid = j.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/analyze", data={
+            "resume_id": rid, "provider": "openai", "cloud_model": "gpt-4o-mini"
+        })
+
+        resp = await self.client.get("/api/jobs/list")
+        jobs = resp.json()["jobs"]
+        job = next((j for j in jobs if j["id"] == jid), None)
+        self.assertIsNotNone(job)
+        self.assertEqual(job["last_model"], "gpt-4o-mini")
+        self.assertEqual(job["provider"], "openai")
+
+    # ── Search — recruiter fields ─────────────────────────────────────────────
+
+    @patch("main.scrape_job")
+    async def test_search_by_recruiter_name(self, mock_scrape):
+        """Search should match recruiter_name in applications."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/recruiter-search-name"})
+        jid = j.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/application", data={
+            "status": "applied", "recruiter_name": "Jane Smith",
+            "recruiter_email": "", "recruiter_phone": "",
+        })
+
+        resp = await self.client.get("/api/jobs/list?search=jane")
+        jobs = resp.json()["jobs"]
+        ids = [j["id"] for j in jobs]
+        self.assertIn(jid, ids)
+
+    @patch("main.scrape_job")
+    async def test_search_by_recruiter_email(self, mock_scrape):
+        """Search should match recruiter_email in applications."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/recruiter-search-email"})
+        jid = j.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/application", data={
+            "status": "applied", "recruiter_name": "",
+            "recruiter_email": "recruiter@uniquecompany.com", "recruiter_phone": "",
+        })
+
+        resp = await self.client.get("/api/jobs/list?search=uniquecompany")
+        jobs = resp.json()["jobs"]
+        ids = [j["id"] for j in jobs]
+        self.assertIn(jid, ids)
+
+    @patch("main.scrape_job")
+    async def test_search_by_recruiter_phone(self, mock_scrape):
+        """Search should match recruiter_phone in applications."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/recruiter-search-phone"})
+        jid = j.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/application", data={
+            "status": "applied", "recruiter_name": "",
+            "recruiter_email": "", "recruiter_phone": "571-999-0001",
+        })
+
+        resp = await self.client.get("/api/jobs/list?search=571-999-0001")
+        jobs = resp.json()["jobs"]
+        ids = [j["id"] for j in jobs]
+        self.assertIn(jid, ids)
+
+    @patch("main.scrape_job")
+    async def test_search_no_match_returns_empty(self, mock_scrape):
+        """Search with no matching term should return empty list."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        await self.client.post("/api/jobs/add", data={"url": "https://example.com/search-no-match"})
+
+        resp = await self.client.get("/api/jobs/list?search=xyznonexistent999")
+        self.assertEqual(resp.json()["total"], 0)
+
     # ── /api/ollama/models proxy ──────────────────────────────────────────────
 
     async def test_ollama_models_returns_list(self):

@@ -52,7 +52,10 @@
 
 <!-- Search and filter bar -->
 <div class="filter-bar">
-  <input type="text" id="filter-search" placeholder="Search title or company…" autocomplete="off" />
+  <div class="search-wrap">
+    <input type="text" id="filter-search" placeholder="Search title, company, or recruiter…" autocomplete="off" />
+    <button id="search-clear-btn" class="search-clear-btn" onclick="clearSearch()" style="display:none;" title="Clear search">✕</button>
+  </div>
   <select id="filter-status">
     <option value="">All Statuses</option>
     <option value="not_applied">Not Applied</option>

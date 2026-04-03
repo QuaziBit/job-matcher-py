@@ -1,3 +1,69 @@
+// ── Location flag map ────────────────────────────────────────────────────────
+// Maps keyword patterns to country flag emojis.
+// Keys are lowercase strings checked with word-boundary regex.
+// Order matters — more specific entries should come first.
+// Add new countries/cities here without touching any other code.
+const LOCATION_FLAGS = [
+  // Remote
+  { keywords: ['remote'],                                              code: 'REMOTE' },
+  // Canada
+  { keywords: ['canada', 'ontario', 'quebec', 'british columbia',
+               'toronto', 'vancouver', 'montreal', 'ottawa', 'calgary'], code: 'CA' },
+  // United Kingdom
+  { keywords: ['united kingdom', 'england', 'scotland', 'wales',
+               'london', 'manchester', 'birmingham', 'edinburgh', ', uk'],code: 'UK' },
+  // Germany
+  { keywords: ['germany', 'deutschland', 'berlin', 'munich', 'frankfurt',
+               'hamburg', 'cologne', 'stuttgart', 'bavaria'],           code: 'DE' },
+  // France
+  { keywords: ['france', 'paris', 'lyon', 'marseille', 'toulouse'],    code: 'FR' },
+  // Australia
+  { keywords: ['australia', 'sydney', 'melbourne', 'brisbane',
+               'perth', 'adelaide'],                                    code: 'AU' },
+  // India
+  { keywords: ['india', 'bangalore', 'mumbai', 'delhi', 'hyderabad',
+               'chennai', 'pune', 'bengaluru'],                         code: 'IN' },
+  // Netherlands
+  { keywords: ['netherlands', 'amsterdam', 'rotterdam', 'the hague'],  code: 'NL' },
+  // Poland
+  { keywords: ['poland', 'warsaw', 'krakow', 'wroclaw', 'gdansk'],     code: 'PL' },
+  // Ukraine
+  { keywords: ['ukraine', 'kyiv', 'kharkiv', 'lviv', 'odessa'],        code: 'UA' },
+  // Singapore
+  { keywords: ['singapore'],                                            code: 'SG' },
+  // Japan
+  { keywords: ['japan', 'tokyo', 'osaka', 'kyoto', 'yokohama'],        code: 'JP' },
+  // Brazil
+  { keywords: ['brazil', 'sao paulo', 'rio de janeiro',
+               'brasilia', 'curitiba'],                                 code: 'BR' },
+  // Ireland
+  { keywords: ['ireland', 'dublin', 'cork', 'galway'],                 code: 'IE' },
+  // Sweden
+  { keywords: ['sweden', 'stockholm', 'gothenburg', 'malmo'],          code: 'SE' },
+  // Spain
+  { keywords: ['spain', 'madrid', 'barcelona', 'valencia', 'seville'], code: 'ES' },
+  // Portugal
+  { keywords: ['portugal', 'lisbon', 'porto'],                         code: 'PT' },
+  // Italy
+  { keywords: ['italy', 'rome', 'milan', 'naples', 'turin'],           code: 'IT' },
+  // Switzerland
+  { keywords: ['switzerland', 'zurich', 'geneva', 'bern', 'basel'],    code: 'CH' },
+  // United States — default fallback for everything else
+  { keywords: ['united states', 'usa', 'u.s.'],                        code: 'US' },
+];
+
+function getLocationFlag(location) {
+  if (!location || /^\d+$/.test(location.trim())) return 'N/A';
+  const loc = location.toLowerCase();
+  for (const entry of LOCATION_FLAGS) {
+    if (entry.keywords.some(kw => loc.includes(kw))) {
+      return entry.code;
+    }
+  }
+  return 'US'; // default
+}
+
+
 // ── Logging helpers ───────────────────────────────────────────────────────────
 
 function log(fn, msg, ...args)    { console.log(`[${fn}]`, msg, ...args); }
@@ -702,9 +768,14 @@ function renderJobs(data) {
       : `<div class="score-badge score-none">—</div>`;
 
     const isManual     = job.is_manual || (job.url || '').startsWith('manual://');
-    const providerTag  = isManual
-      ? `<span class="provider-tag">manual</span>`
-      : (job.provider ? `<span class="provider-tag">${job.provider}</span>` : '');
+    // Source tag — how the job was added
+    const sourceTag    = `<span class="provider-tag">${isManual ? 'manual' : 'scraped'}</span>`;
+    // Model tag — only shown if job has been analyzed
+    const modelTag     = (job.provider && job.last_model)
+      ? `<span class="provider-tag" title="${job.provider} · ${job.last_model}">${job.provider} · ${job.last_model}</span>`
+      : job.provider
+        ? `<span class="provider-tag">${job.provider}</span>`
+        : '';
     const recruiterBadge = job.has_recruiter
       ? `<span class="recruiter-tag" title="Open recruiter info" onclick="event.preventDefault();event.stopPropagation();window.location='/job/${job.id}#application';">👤 recruiter</span>`
       : '';
@@ -714,11 +785,16 @@ function renderJobs(data) {
     const company     = job.company  || '';
     const location    = job.location || '';
     const sep         = company && location ? ' · ' : '';
-    const metaBase    = (company + sep + location) ||
-                        (isManual ? 'pasted description' : (job.url || '').substring(0, 60) + '…');
-    const meta        = metaBase
-                      ? (recruiterBadge ? `${metaBase} · ${recruiterBadge}` : metaBase)
-                      : recruiterBadge;
+    // Location badge — uses LOCATION_FLAGS map defined at top of file
+    const locationFlag = getLocationFlag(location);
+    const locationBadge = locationFlag === 'N/A'
+      ? `<span class="location-tag"><span class="location-code">N/A</span></span>`
+      : locationFlag
+        ? `<span class="location-tag" title="${location}"><span class="location-code">${locationFlag}</span> ${location}</span>`
+        : '';
+    const metaBase    = company || (isManual ? 'pasted description' : (job.url || '').substring(0, 60) + '…');
+    const metaParts   = [metaBase, locationBadge, recruiterBadge].filter(Boolean);
+    const meta        = metaParts.join(' · ');
 
     return `<a href="/job/${job.id}" class="job-item" style="text-decoration:none;">
       <div>${scoreBadge}</div>
@@ -727,7 +803,8 @@ function renderJobs(data) {
         <div class="job-meta">${meta}</div>
       </div>
       <div class="job-item-right">
-        ${providerTag}
+        ${sourceTag}
+        ${modelTag}
         <span class="status-badge status-${status}">${statusLabel}</span>
       </div>
     </a>`;
@@ -816,6 +893,20 @@ function hasActiveFilter() {
 
 function applyFilters()         { _currentPage = 1; fetchJobs(); }
 function applyFiltersDebounced() { clearTimeout(_searchTimer); _searchTimer = setTimeout(applyFilters, 300); }
+
+function clearSearch() {
+  const el = document.getElementById('filter-search');
+  const btn = document.getElementById('search-clear-btn');
+  if (el) { el.value = ''; el.focus(); }
+  if (btn) btn.style.display = 'none';
+  applyFilters();
+}
+
+function updateSearchClearBtn() {
+  const el  = document.getElementById('filter-search');
+  const btn = document.getElementById('search-clear-btn');
+  if (el && btn) btn.style.display = el.value.trim() ? '' : 'none';
+}
 function changePage(dir)        { _currentPage += dir; fetchJobs(); }
 
 function changePerPage() {
@@ -891,6 +982,7 @@ function restoreFromURL() {
   };
 
   setEl('filter-search',   getValue('search'));
+  updateSearchClearBtn();
   setEl('filter-status',   getValue('status'));
   setEl('filter-score',    getValue('score'));
   setEl('filter-provider', getValue('provider'));
@@ -918,7 +1010,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!jobsList) return; // not on jobs page
 
   const searchEl = document.getElementById('filter-search');
-  if (searchEl) searchEl.addEventListener('input', applyFiltersDebounced);
+  if (searchEl) searchEl.addEventListener('input', () => { applyFiltersDebounced(); updateSearchClearBtn(); });
 
   ['filter-status', 'filter-score', 'filter-provider'].forEach(id => {
     const el = document.getElementById(id);

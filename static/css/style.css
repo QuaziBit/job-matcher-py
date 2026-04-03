@@ -305,6 +305,10 @@ label {
   text-transform: uppercase;
   color: var(--text-mute);
   border: 1px solid var(--border);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .recruiter-tag {
@@ -315,6 +319,24 @@ label {
   text-decoration: none;
 }
 .recruiter-tag:hover { opacity: 1; text-decoration: underline; }
+.location-tag {
+  font-size: 11px;
+  opacity: 0.6;
+  color: var(--text-mute);
+}
+.location-code {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 1px 4px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  color: var(--text-mute);
+  vertical-align: middle;
+  margin-right: 2px;
+}
 
 /* ── Tabs ── */
 .tabs {
@@ -539,6 +561,38 @@ label {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+.search-wrap {
+  flex: 1;
+  min-width: 160px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-wrap input[type="text"] {
+  width: 100%;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 6px 28px 6px 10px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  outline: none;
+}
+.search-wrap input[type="text"]:focus { border-color: var(--amber); }
+.search-wrap input::placeholder { color: var(--text-mute); }
+.search-clear-btn {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--text-mute);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}
+.search-clear-btn:hover { color: var(--text); }
 .filter-bar input[type="text"] {
   flex: 1;
   min-width: 160px;

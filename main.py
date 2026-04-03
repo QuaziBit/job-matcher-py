@@ -219,9 +219,14 @@ async def jobs_list(
     args  = []
 
     if search:
-        where.append("(LOWER(j.title) LIKE ? OR LOWER(j.company) LIKE ?)")
+        where.append(
+            "(LOWER(j.title) LIKE ? OR LOWER(j.company) LIKE ?"
+            " OR LOWER(COALESCE(a.recruiter_name,'')) LIKE ?"
+            " OR LOWER(COALESCE(a.recruiter_email,'')) LIKE ?"
+            " OR LOWER(COALESCE(a.recruiter_phone,'')) LIKE ?)"
+        )
         like = f"%{search.lower()}%"
-        args += [like, like]
+        args += [like, like, like, like, like]
 
     if status:
         where.append("COALESCE(a.status, 'not_applied') = ?")
@@ -260,6 +265,7 @@ async def jobs_list(
                (SELECT score          FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as best_score,
                (SELECT adjusted_score FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as adjusted_score,
                (SELECT llm_provider   FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as provider,
+               (SELECT llm_model     FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as last_model,
                CASE WHEN (a.recruiter_name IS NOT NULL AND a.recruiter_name != '')
                       OR (a.recruiter_email IS NOT NULL AND a.recruiter_email != '')
                       OR (a.recruiter_phone IS NOT NULL AND a.recruiter_phone != '')
