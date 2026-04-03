@@ -307,6 +307,15 @@ label {
   border: 1px solid var(--border);
 }
 
+.recruiter-tag {
+  font-size: 11px;
+  opacity: 0.7;
+  cursor: pointer;
+  color: var(--amber);
+  text-decoration: none;
+}
+.recruiter-tag:hover { opacity: 1; text-decoration: underline; }
+
 /* ── Tabs ── */
 .tabs {
   display: flex;

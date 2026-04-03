@@ -259,7 +259,11 @@ async def jobs_list(
                COALESCE(a.status, 'not_applied') as status,
                (SELECT score          FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as best_score,
                (SELECT adjusted_score FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as adjusted_score,
-               (SELECT llm_provider   FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as provider
+               (SELECT llm_provider   FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as provider,
+               CASE WHEN (a.recruiter_name IS NOT NULL AND a.recruiter_name != '')
+                      OR (a.recruiter_email IS NOT NULL AND a.recruiter_email != '')
+                      OR (a.recruiter_phone IS NOT NULL AND a.recruiter_phone != '')
+                    THEN 1 ELSE 0 END as has_recruiter
         FROM jobs j
         LEFT JOIN applications a ON a.job_id = j.id
         {where_sql}
@@ -802,6 +806,23 @@ async def get_description(job_id: int, db: aiosqlite.Connection = Depends(get_db
     if not row:
         raise HTTPException(status_code=404)
     return JSONResponse({"description": row["raw_description"]})
+
+
+# ── Ollama models proxy ──────────────────────────────────────────────────────
+
+@app.get("/api/ollama/models")
+async def get_ollama_models():
+    """Proxy Ollama /api/tags to avoid CORS issues in the browser."""
+    import httpx
+    from analyzer.config import ollama_base_url
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f"{ollama_base_url()}/api/tags")
+            resp.raise_for_status()
+        models = [m["name"] for m in resp.json().get("models", [])]
+        return JSONResponse({"models": models})
+    except Exception:
+        return JSONResponse({"models": []})
 
 
 # ── Known models endpoint ────────────────────────────────────────────────────

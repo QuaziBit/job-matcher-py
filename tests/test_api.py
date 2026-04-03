@@ -611,6 +611,114 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(resp2.status_code, 200)
 
+    # ── has_recruiter flag in job list ────────────────────────────────────────
+
+    @patch("main.scrape_job")
+    async def test_job_list_has_recruiter_false_by_default(self, mock_scrape):
+        """Job with no application data should have has_recruiter=0."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/no-recruiter"})
+        jid = j.json()["job_id"]
+        resp = await self.client.get("/api/jobs/list")
+        self.assertEqual(resp.status_code, 200)
+        jobs = resp.json()["jobs"]
+        job = next((j for j in jobs if j["id"] == jid), None)
+        self.assertIsNotNone(job)
+        self.assertEqual(job["has_recruiter"], 0)
+
+    @patch("main.scrape_job")
+    async def test_job_list_has_recruiter_true_when_name_saved(self, mock_scrape):
+        """Job with recruiter_name saved should have has_recruiter=1."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/with-recruiter"})
+        jid = j.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/application", data={
+            "status": "applied", "recruiter_name": "Jane Smith",
+            "recruiter_email": "", "recruiter_phone": "",
+        })
+        resp = await self.client.get("/api/jobs/list")
+        jobs = resp.json()["jobs"]
+        job = next((j for j in jobs if j["id"] == jid), None)
+        self.assertIsNotNone(job)
+        self.assertEqual(job["has_recruiter"], 1)
+
+    @patch("main.scrape_job")
+    async def test_job_list_has_recruiter_true_when_email_only(self, mock_scrape):
+        """Email alone (no name) should also set has_recruiter=1."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/email-recruiter"})
+        jid = j.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/application", data={
+            "status": "not_applied", "recruiter_name": "",
+            "recruiter_email": "recruiter@co.com", "recruiter_phone": "",
+        })
+        resp = await self.client.get("/api/jobs/list")
+        jobs = resp.json()["jobs"]
+        job = next((j for j in jobs if j["id"] == jid), None)
+        self.assertEqual(job["has_recruiter"], 1)
+
+    @patch("main.scrape_job")
+    async def test_job_list_has_recruiter_false_when_status_only(self, mock_scrape):
+        """Application with only status (no contact info) should have has_recruiter=0."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/status-only"})
+        jid = j.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/application", data={
+            "status": "applied", "recruiter_name": "",
+            "recruiter_email": "", "recruiter_phone": "",
+        })
+        resp = await self.client.get("/api/jobs/list")
+        jobs = resp.json()["jobs"]
+        job = next((j for j in jobs if j["id"] == jid), None)
+        self.assertEqual(job["has_recruiter"], 0)
+
+    # ── /api/ollama/models proxy ──────────────────────────────────────────────
+
+    async def test_ollama_models_returns_list(self):
+        """Proxy should return sorted model list when Ollama is running."""
+        import httpx
+        mock_resp = {"models": [{"name": "llama3.1:8b"}, {"name": "gemma3:27b"}]}
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_resp_obj = MagicMock()
+            mock_resp_obj.json.return_value = mock_resp
+            mock_resp_obj.raise_for_status = MagicMock()
+            mock_client.get = AsyncMock(return_value=mock_resp_obj)
+            mock_cls.return_value = mock_client
+            resp = await self.client.get("/api/ollama/models")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("models", data)
+        self.assertIn("llama3.1:8b", data["models"])
+        self.assertIn("gemma3:27b", data["models"])
+
+    async def test_ollama_models_returns_empty_when_offline(self):
+        """Proxy should return empty list when Ollama is not reachable."""
+        import httpx
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+            mock_cls.return_value = mock_client
+            resp = await self.client.get("/api/ollama/models")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["models"], [])
+
     async def test_index_page_renders(self):
         resp = await self.client.get("/")
         self.assertEqual(resp.status_code, 200)

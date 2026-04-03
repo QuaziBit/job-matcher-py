@@ -20,6 +20,18 @@ function toast(msg, type = "info") {
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
+function activateTab(tabName) {
+  const tab = document.querySelector(`.tab[data-tab="${tabName}"]`);
+  if (!tab) return;
+  const tabBar = tab.closest(".tabs");
+  const parent = tabBar ? tabBar.closest(".tab-container") || document : document;
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+  tab.classList.add("active");
+  const content = parent.querySelector(`[data-tab-content="${tabName}"]`);
+  if (content) content.classList.add("active");
+}
+
 function initTabs() {
   log("initTabs", `found ${document.querySelectorAll(".tabs").length} tab bar(s)`);
   document.querySelectorAll(".tabs").forEach(tabBar => {
@@ -221,10 +233,10 @@ async function populateOllamaModels() {
   const sel = document.getElementById('ollama-model-select');
   if (!sel) return;
   try {
-    const res  = await fetch('http://localhost:11434/api/tags');
+    const res  = await fetch('/api/ollama/models');
     if (!res.ok) return;
     const data = await res.json();
-    const models = (data.models || []).map(m => m.name).sort();
+    const models = (data.models || []).slice().sort();
     if (!models.length) return;
     const current = sel.value;
     sel.innerHTML = '';
@@ -555,6 +567,12 @@ document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initAddModeToggle();
 
+  // Activate tab from URL hash (e.g. /job/1#application)
+  if (window.location.hash) {
+    const hashTab = window.location.hash.replace('#', '');
+    activateTab(hashTab);
+  }
+
   // Wire provider radio buttons to show/hide model row
   document.querySelectorAll('input[name="provider"]').forEach(radio => {
     radio.addEventListener('change', updateProviderModelRow);
@@ -683,23 +701,29 @@ function renderJobs(data) {
       ? `<div class="score-badge score-${score}">${score}</div>`
       : `<div class="score-badge score-none">—</div>`;
 
-    const isManual    = job.is_manual || (job.url || '').startsWith('manual://');
-    const providerTag = isManual
+    const isManual     = job.is_manual || (job.url || '').startsWith('manual://');
+    const providerTag  = isManual
       ? `<span class="provider-tag">manual</span>`
       : (job.provider ? `<span class="provider-tag">${job.provider}</span>` : '');
+    const recruiterBadge = job.has_recruiter
+      ? `<span class="recruiter-tag" title="Open recruiter info" onclick="event.preventDefault();event.stopPropagation();window.location='/job/${job.id}#application';">👤 recruiter</span>`
+      : '';
 
     const status      = job.status || 'not_applied';
     const statusLabel = status.replace(/_/g, ' ');
     const company     = job.company  || '';
     const location    = job.location || '';
     const sep         = company && location ? ' · ' : '';
-    const meta        = (company + sep + location) ||
+    const metaBase    = (company + sep + location) ||
                         (isManual ? 'pasted description' : (job.url || '').substring(0, 60) + '…');
+    const meta        = metaBase
+                      ? (recruiterBadge ? `${metaBase} · ${recruiterBadge}` : metaBase)
+                      : recruiterBadge;
 
     return `<a href="/job/${job.id}" class="job-item" style="text-decoration:none;">
       <div>${scoreBadge}</div>
       <div class="job-item-info">
-        <div class="job-title">${job.title || 'Untitled Job'}</div>
+        <div class="job-title">${job.title || (job.url ? (() => { try { return new URL(job.url).hostname; } catch(e) { return 'Untitled Job'; } })() : 'Untitled Job')}</div>
         <div class="job-meta">${meta}</div>
       </div>
       <div class="job-item-right">
