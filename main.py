@@ -150,6 +150,19 @@ async def job_detail(job_id: int, request: Request, db: aiosqlite.Connection = D
         last_provider = "anthropic"
         last_model    = ""
 
+    # Check provider availability
+    has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY", ""))
+    has_openai    = bool(os.getenv("OPENAI_API_KEY", ""))
+    has_gemini    = bool(os.getenv("GEMINI_API_KEY", ""))
+    has_ollama    = False
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2) as _client:
+            _r = await _client.get(f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}/api/tags")
+            has_ollama = _r.status_code == 200
+    except Exception:
+        pass
+
     return templates.TemplateResponse("job_detail.html", {
         "request":          request,
         "job":              job,
@@ -167,6 +180,10 @@ async def job_detail(job_id: int, request: Request, db: aiosqlite.Connection = D
         "has_salary_in_jd": _job_has_salary(job.get("raw_description", "")),
         "last_resume_id":   last_resume_id,
         "last_provider":    last_provider,
+        "has_anthropic":    has_anthropic,
+        "has_openai":       has_openai,
+        "has_gemini":       has_gemini,
+        "has_ollama":       has_ollama,
     })
 
 

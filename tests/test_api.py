@@ -1039,6 +1039,92 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         # Page should render without error — defaults applied
         self.assertIn(b"Run New Analysis", resp.content)
 
+    @patch("main.scrape_job")
+    async def test_job_detail_hides_anthropic_when_no_key(self, mock_scrape):
+        """Anthropic radio button should not appear when API key is not set."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/no-anthropic"})
+        jid = j.json()["job_id"]
+
+        import os
+        orig = os.environ.pop("ANTHROPIC_API_KEY", None)
+        try:
+            resp = await self.client.get(f"/job/{jid}")
+            self.assertEqual(resp.status_code, 200)
+            self.assertNotIn(b'value="anthropic"', resp.content)
+        finally:
+            if orig is not None:
+                os.environ["ANTHROPIC_API_KEY"] = orig
+
+    @patch("main.scrape_job")
+    async def test_job_detail_shows_anthropic_when_key_set(self, mock_scrape):
+        """Anthropic radio button should appear when API key is set."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/with-anthropic"})
+        jid = j.json()["job_id"]
+
+        import os
+        orig = os.environ.get("ANTHROPIC_API_KEY")
+        os.environ["ANTHROPIC_API_KEY"] = "sk-ant-testkey"
+        try:
+            resp = await self.client.get(f"/job/{jid}")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn(b'value="anthropic"', resp.content)
+        finally:
+            if orig is not None:
+                os.environ["ANTHROPIC_API_KEY"] = orig
+            else:
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    @patch("main.scrape_job")
+    async def test_job_detail_shows_openai_when_key_set(self, mock_scrape):
+        """OpenAI radio button should appear when API key is set."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/with-openai"})
+        jid = j.json()["job_id"]
+
+        import os
+        orig = os.environ.get("OPENAI_API_KEY")
+        os.environ["OPENAI_API_KEY"] = "sk-proj-testkey"
+        try:
+            resp = await self.client.get(f"/job/{jid}")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn(b'value="openai"', resp.content)
+        finally:
+            if orig is not None:
+                os.environ["OPENAI_API_KEY"] = orig
+            else:
+                os.environ.pop("OPENAI_API_KEY", None)
+
+    @patch("main.scrape_job")
+    async def test_job_detail_hides_openai_when_no_key(self, mock_scrape):
+        """OpenAI radio button should not appear when API key is not set."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/no-openai"})
+        jid = j.json()["job_id"]
+
+        import os
+        orig = os.environ.pop("OPENAI_API_KEY", None)
+        try:
+            resp = await self.client.get(f"/job/{jid}")
+            self.assertEqual(resp.status_code, 200)
+            self.assertNotIn(b'value="openai"', resp.content)
+        finally:
+            if orig is not None:
+                os.environ["OPENAI_API_KEY"] = orig
+
     async def test_job_detail_404_for_missing(self):
         resp = await self.client.get("/job/9999")
         self.assertEqual(resp.status_code, 404)

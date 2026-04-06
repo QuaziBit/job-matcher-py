@@ -234,11 +234,13 @@ class LauncherHandler(BaseHTTPRequestHandler):
             self.send_html(render_launcher_page(cfg))
 
         elif path == "/health":
+            # Use query param value directly — do NOT fall back to cfg when param is
+            # present but empty, otherwise clearing a key still shows green (old value).
             db_path    = query.get("db_path",    [""])[0] or self.launcher.cfg.get("db_path", "job_matcher.db")
             ollama_url = query.get("ollama_url",  [""])[0] or self.launcher.cfg.get("ollama_base_url", "http://localhost:11434")
-            api_key    = query.get("api_key",     [""])[0] or self.launcher.cfg.get("anthropic_api_key", "")
-            openai_key = query.get("openai_key",  [""])[0] or self.launcher.cfg.get("openai_api_key", "")
-            gemini_key = query.get("gemini_key",  [""])[0] or self.launcher.cfg.get("gemini_api_key", "")
+            api_key    = query.get("api_key",     [""])[0] if "api_key"    in query else self.launcher.cfg.get("anthropic_api_key", "")
+            openai_key = query.get("openai_key",  [""])[0] if "openai_key" in query else self.launcher.cfg.get("openai_api_key", "")
+            gemini_key = query.get("gemini_key",  [""])[0] if "gemini_key" in query else self.launcher.cfg.get("gemini_api_key", "")
             logger.info(f"→ Launcher health: db={db_path} ollama={ollama_url} key_set={bool(api_key)}")
             report = run_health_checks(db_path, ollama_url, api_key, openai_key, gemini_key)
             logger.info(f"✓ Health: sqlite={report['sqlite']['status']} ollama={report['ollama']['status']} anthropic={report['anthropic']['status']} openai={report['openai']['status']} gemini={report['gemini']['status']} models={len(report['models'])}")
@@ -277,9 +279,9 @@ class LauncherHandler(BaseHTTPRequestHandler):
 
         if v := form.get("host", ""):            cfg["host"] = v
         if v := form.get("db_path", ""):         cfg["db_path"] = v
-        if v := form.get("anthropic_api_key",""):cfg["anthropic_api_key"] = v
-        if v := form.get("openai_api_key",   ""):cfg["openai_api_key"]   = v
-        if v := form.get("gemini_api_key",   ""):cfg["gemini_api_key"]   = v
+        cfg["anthropic_api_key"] = form.get("anthropic_api_key", "")
+        cfg["openai_api_key"]   = form.get("openai_api_key",   "")
+        cfg["gemini_api_key"]   = form.get("gemini_api_key",   "")
         if v := form.get("ollama_base_url", ""):  cfg["ollama_base_url"] = v
         if v := form.get("ollama_model", ""):    cfg["ollama_model"] = v
         if v := form.get("ollama_timeout", ""):

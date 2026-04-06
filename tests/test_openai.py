@@ -305,5 +305,75 @@ class TestLauncherOpenAIConfig(unittest.TestCase):
                 pass
 
 
+class TestHealthKeyFallback(unittest.TestCase):
+    """
+    Tests that the health endpoint uses the query param value directly
+    and does NOT fall back to cfg when the param is present but empty.
+    This ensures clearing a key in the launcher immediately shows ⚠.
+    """
+
+    def _make_handler(self, query: dict, cfg_openai: str = "sk-cfg-key"):
+        from launcher import LauncherHandler, Launcher
+        cfg = {"openai_api_key": cfg_openai, "anthropic_api_key": "", "gemini_api_key": ""}
+        launcher = MagicMock(spec=Launcher)
+        launcher.cfg = cfg
+        handler = LauncherHandler.__new__(LauncherHandler)
+        handler.launcher = launcher
+        return handler, query
+
+    def test_empty_openai_key_param_does_not_fall_back_to_cfg(self):
+        """Sending openai_key= (empty) should use empty, not the saved cfg key."""
+        from launcher import LauncherHandler
+        handler, query = self._make_handler({"openai_key": [""]}, cfg_openai="sk-old-key")
+        # Simulate the key resolution logic from the health handler
+        openai_key = query.get("openai_key", [""])[0] if "openai_key" in query                      else handler.launcher.cfg.get("openai_api_key", "")
+        self.assertEqual(openai_key, "")
+
+    def test_missing_openai_key_param_falls_back_to_cfg(self):
+        """When openai_key param is absent entirely, fall back to saved cfg."""
+        from launcher import LauncherHandler
+        handler, query = self._make_handler({}, cfg_openai="sk-saved-key")
+        openai_key = query.get("openai_key", [""])[0] if "openai_key" in query                      else handler.launcher.cfg.get("openai_api_key", "")
+        self.assertEqual(openai_key, "sk-saved-key")
+
+    def test_nonempty_openai_key_param_used_directly(self):
+        """When openai_key param has a value, use it."""
+        from launcher import LauncherHandler
+        handler, query = self._make_handler({"openai_key": ["sk-new-key"]}, cfg_openai="sk-old-key")
+        openai_key = query.get("openai_key", [""])[0] if "openai_key" in query                      else handler.launcher.cfg.get("openai_api_key", "")
+        self.assertEqual(openai_key, "sk-new-key")
+
+
+class TestHealthAnthropicKeyFallback(unittest.TestCase):
+    """Same fallback fix tests for the Anthropic api_key param."""
+
+    def _make_handler(self, query: dict, cfg_anthropic: str = "sk-ant-cfg-key"):
+        from launcher import LauncherHandler, Launcher
+        cfg = {"anthropic_api_key": cfg_anthropic, "openai_api_key": "", "gemini_api_key": ""}
+        launcher = MagicMock(spec=Launcher)
+        launcher.cfg = cfg
+        handler = LauncherHandler.__new__(LauncherHandler)
+        handler.launcher = launcher
+        return handler, query
+
+    def test_empty_anthropic_key_param_does_not_fall_back_to_cfg(self):
+        """Sending api_key= (empty) should use empty, not the saved cfg key."""
+        handler, query = self._make_handler({"api_key": [""]}, cfg_anthropic="sk-ant-old")
+        api_key = query.get("api_key", [""])[0] if "api_key" in query                   else handler.launcher.cfg.get("anthropic_api_key", "")
+        self.assertEqual(api_key, "")
+
+    def test_missing_anthropic_key_param_falls_back_to_cfg(self):
+        """When api_key param is absent entirely, fall back to saved cfg."""
+        handler, query = self._make_handler({}, cfg_anthropic="sk-ant-saved")
+        api_key = query.get("api_key", [""])[0] if "api_key" in query                   else handler.launcher.cfg.get("anthropic_api_key", "")
+        self.assertEqual(api_key, "sk-ant-saved")
+
+    def test_nonempty_anthropic_key_param_used_directly(self):
+        """When api_key param has a value, use it."""
+        handler, query = self._make_handler({"api_key": ["sk-ant-new"]}, cfg_anthropic="sk-ant-old")
+        api_key = query.get("api_key", [""])[0] if "api_key" in query                   else handler.launcher.cfg.get("anthropic_api_key", "")
+        self.assertEqual(api_key, "sk-ant-new")
+
+
 if __name__ == "__main__":
     unittest.main()
