@@ -833,7 +833,7 @@ function renderJobs(data) {
         ? `<span class="provider-tag">${job.provider}</span>`
         : '';
     const recruiterBadge = job.has_recruiter
-      ? `<span class="recruiter-tag" title="Open recruiter info" onclick="event.preventDefault();event.stopPropagation();window.location='/job/${job.id}#application';">👤 recruiter</span>`
+      ? `<span class="provider-tag" style="cursor:pointer;" onclick="event.preventDefault();event.stopPropagation();window.location='/job/${job.id}#application';" title="Recruiter contact saved">👤</span>`
       : '';
 
     const status      = job.status || 'not_applied';
@@ -850,7 +850,7 @@ function renderJobs(data) {
         : '';
     const metaBase    = company || (isManual ? 'pasted description' : (job.url || '').substring(0, 60) + '…');
     const dateLabel   = job.scraped_at ? `<span class="date-tag">added ${formatJobDate(job.scraped_at)}</span>` : '';
-    const metaParts   = [metaBase, locationBadge, dateLabel, recruiterBadge].filter(Boolean);
+    const metaParts   = [metaBase, locationBadge, dateLabel].filter(Boolean);
     const meta        = metaParts.join(' · ');
 
     return `<a href="/job/${job.id}" class="job-item" style="text-decoration:none;">
@@ -860,6 +860,7 @@ function renderJobs(data) {
         <div class="job-meta">${meta}</div>
       </div>
       <div class="job-item-right">
+        ${recruiterBadge}
         ${sourceTag}
         ${modelTag}
         <span class="status-badge status-${status}">${statusLabel}</span>
