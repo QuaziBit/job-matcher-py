@@ -1227,3 +1227,318 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(count, 1)
         self.assertEqual(app_row["status"], "applied")
         self.assertEqual(app_row["recruiter_name"], "Sumpter")
+
+    # ── GET /api/jobs/{job_id}/detail ─────────────────────────────────────────
+
+    async def test_job_detail_api_not_found(self):
+        """Non-existent job_id should return 404."""
+        resp = await self.client.get("/api/jobs/99999/detail")
+        self.assertEqual(resp.status_code, 404)
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_returns_job_fields(self, mock_scrape):
+        """Response must include job object with expected fields."""
+        mock_scrape.return_value = {
+            "title": "Backend Engineer", "company": "Acme", "location": "Remote",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-job-fields"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("job", data)
+        self.assertEqual(data["job"]["id"], jid)
+        self.assertEqual(data["job"]["title"], "Backend Engineer")
+        self.assertEqual(data["job"]["company"], "Acme")
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_empty_application(self, mock_scrape):
+        """Job with no application saved should return empty application dict."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-no-app"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["application"], {})
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_application_populated(self, mock_scrape):
+        """Saved application data should appear in the response."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-with-app"})
+        jid = j.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/application", data={
+            "status": "applied", "recruiter_name": "Jane",
+            "recruiter_email": "jane@co.com", "recruiter_phone": "",
+        })
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(resp.status_code, 200)
+        app = resp.json()["application"]
+        self.assertEqual(app["status"], "applied")
+        self.assertEqual(app["recruiter_name"], "Jane")
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_empty_analyses(self, mock_scrape):
+        """Job with no analyses should return empty list."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-no-analyses"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["analyses"], [])
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_analyses_parsed(self, mock_scrape):
+        """matched_skills and missing_skills in analyses must be lists, not raw strings."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-analyses-parsed"})
+        jid = j.json()["job_id"]
+
+        r = await self.client.post("/api/resumes/add", data={"label": "v1", "content": MOCK_RESUME_DEVSECOPS})
+        rid = r.json()["resume_id"]
+
+        with patch("main.analyze_match") as mock_analyze:
+            mock_analyze.return_value = {
+                "score": 4, "adjusted_score": 4,
+                "penalty_breakdown": {"blockers": 0, "majors": 0, "minors": 0,
+                                      "blocker_penalty": 0, "major_penalty": 0,
+                                      "minor_penalty": 0, "count_penalty": 0, "total_penalty": 0},
+                "matched_skills": ["Python", "Docker"],
+                "missing_skills": [],
+                "reasoning": "Good match.", "llm_provider": "anthropic",
+                "llm_model": anthropic_model(),
+            }
+            await self.client.post(f"/api/jobs/{jid}/analyze", data={
+                "resume_id": rid, "provider": "anthropic"
+            })
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(resp.status_code, 200)
+        analyses = resp.json()["analyses"]
+        self.assertEqual(len(analyses), 1)
+        self.assertIsInstance(analyses[0]["matched_skills"], list)
+        self.assertIsInstance(analyses[0]["missing_skills"], list)
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_used_fallback_is_bool(self, mock_scrape):
+        """used_fallback field in analyses must be a bool, not an int."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-fallback-bool"})
+        jid = j.json()["job_id"]
+
+        r = await self.client.post("/api/resumes/add", data={"label": "v1", "content": MOCK_RESUME_DEVSECOPS})
+        rid = r.json()["resume_id"]
+
+        with patch("main.analyze_match") as mock_analyze:
+            mock_analyze.return_value = {
+                "score": 3, "adjusted_score": 3,
+                "penalty_breakdown": {"blockers": 0, "majors": 0, "minors": 0,
+                                      "blocker_penalty": 0, "major_penalty": 0,
+                                      "minor_penalty": 0, "count_penalty": 0, "total_penalty": 0},
+                "matched_skills": [], "missing_skills": [],
+                "reasoning": "Ok.", "llm_provider": "anthropic",
+                "llm_model": anthropic_model(),
+            }
+            await self.client.post(f"/api/jobs/{jid}/analyze", data={
+                "resume_id": rid, "provider": "anthropic"
+            })
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        analyses = resp.json()["analyses"]
+        self.assertIsInstance(analyses[0]["used_fallback"], bool)
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_resumes_list(self, mock_scrape):
+        """Resumes list should be present and contain saved resumes."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        await self.client.post("/api/resumes/add", data={"label": "My Resume", "content": MOCK_RESUME_DEVSECOPS})
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-resumes"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(resp.status_code, 200)
+        resumes = resp.json()["resumes"]
+        self.assertIsInstance(resumes, list)
+        self.assertTrue(any(r["label"] == "My Resume" for r in resumes))
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_has_required_top_level_keys(self, mock_scrape):
+        """Response must include all expected top-level keys."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-keys"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        for key in ["job", "application", "analyses", "resumes", "text_quality",
+                    "comparison", "salary_estimate", "has_salary_in_jd",
+                    "last_resume_id", "last_provider", "analysis_mode",
+                    "anthropic_model", "openai_model", "gemini_model", "ollama_model"]:
+            self.assertIn(key, data, f"Missing key: {key}")
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_text_quality_present(self, mock_scrape):
+        """text_quality must be a dict with a 'level' key."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-text-quality"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        tq = resp.json()["text_quality"]
+        self.assertIsInstance(tq, dict)
+        self.assertIn("level", tq)
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_salary_estimate_none_by_default(self, mock_scrape):
+        """salary_estimate should be null for a fresh job with no estimate."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-no-salary"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertIsNone(resp.json()["salary_estimate"])
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_default_provider_is_anthropic(self, mock_scrape):
+        """last_provider should default to 'anthropic' when no analyses exist."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-default-provider"})
+        jid = j.json()["job_id"]
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(resp.json()["last_provider"], "anthropic")
+
+    @patch("main.scrape_job")
+    async def test_job_detail_api_last_provider_from_analysis(self, mock_scrape):
+        """last_provider should reflect the provider used in the most recent analysis."""
+        mock_scrape.return_value = {
+            "title": "Dev", "company": "Co", "location": "VA",
+            "raw_description": MOCK_JOB_DEVSECOPS,
+        }
+        j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/detail-last-provider"})
+        jid = j.json()["job_id"]
+
+        r = await self.client.post("/api/resumes/add", data={"label": "v1", "content": MOCK_RESUME_DEVSECOPS})
+        rid = r.json()["resume_id"]
+
+        with patch("main.analyze_match") as mock_analyze:
+            mock_analyze.return_value = {
+                "score": 3, "adjusted_score": 3,
+                "penalty_breakdown": {"blockers": 0, "majors": 0, "minors": 0,
+                                      "blocker_penalty": 0, "major_penalty": 0,
+                                      "minor_penalty": 0, "count_penalty": 0, "total_penalty": 0},
+                "matched_skills": [], "missing_skills": [],
+                "reasoning": "Ok.", "llm_provider": "ollama",
+                "llm_model": "llama3.1:8b",
+            }
+            await self.client.post(f"/api/jobs/{jid}/analyze", data={
+                "resume_id": rid, "provider": "ollama", "model": "llama3.1:8b"
+            })
+
+        resp = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(resp.json()["last_provider"], "ollama")
+
+    # ── GET /api/providers/status ─────────────────────────────────────────────
+
+    async def test_providers_status_has_required_keys(self):
+        """Response must include all expected keys."""
+        resp = await self.client.get("/api/providers/status")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        for key in ["has_anthropic", "has_openai", "has_gemini", "has_ollama",
+                    "anthropic_model", "openai_model", "gemini_model", "ollama_model"]:
+            self.assertIn(key, data, f"Missing key: {key}")
+
+    async def test_providers_status_has_anthropic_false_when_key_unset(self):
+        """has_anthropic must be False when ANTHROPIC_API_KEY is not set."""
+        orig = os.environ.pop("ANTHROPIC_API_KEY", None)
+        try:
+            resp = await self.client.get("/api/providers/status")
+            self.assertFalse(resp.json()["has_anthropic"])
+        finally:
+            if orig:
+                os.environ["ANTHROPIC_API_KEY"] = orig
+
+    async def test_providers_status_has_anthropic_true_when_key_set(self):
+        """has_anthropic must be True when ANTHROPIC_API_KEY is set."""
+        os.environ["ANTHROPIC_API_KEY"] = "sk-test-key"
+        try:
+            resp = await self.client.get("/api/providers/status")
+            self.assertTrue(resp.json()["has_anthropic"])
+        finally:
+            del os.environ["ANTHROPIC_API_KEY"]
+
+    async def test_providers_status_has_openai_false_when_key_unset(self):
+        """has_openai must be False when OPENAI_API_KEY is not set."""
+        orig = os.environ.pop("OPENAI_API_KEY", None)
+        try:
+            resp = await self.client.get("/api/providers/status")
+            self.assertFalse(resp.json()["has_openai"])
+        finally:
+            if orig:
+                os.environ["OPENAI_API_KEY"] = orig
+
+    async def test_providers_status_has_gemini_false_when_key_unset(self):
+        """has_gemini must be False when GEMINI_API_KEY is not set."""
+        orig = os.environ.pop("GEMINI_API_KEY", None)
+        try:
+            resp = await self.client.get("/api/providers/status")
+            self.assertFalse(resp.json()["has_gemini"])
+        finally:
+            if orig:
+                os.environ["GEMINI_API_KEY"] = orig
+
+    async def test_providers_status_has_ollama_false_when_unreachable(self):
+        """has_ollama must be False when Ollama is unreachable."""
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            resp = await self.client.get("/api/providers/status")
+        self.assertFalse(resp.json()["has_ollama"])
+
+    async def test_providers_status_model_fields_are_strings(self):
+        """All model fields must be non-empty strings."""
+        resp = await self.client.get("/api/providers/status")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        for key in ["anthropic_model", "openai_model", "gemini_model", "ollama_model"]:
+            self.assertIsInstance(data[key], str, f"{key} should be a string")
+            self.assertTrue(len(data[key]) > 0, f"{key} should not be empty")

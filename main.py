@@ -851,6 +851,155 @@ async def get_description(job_id: int, db: aiosqlite.Connection = Depends(get_db
     return JSONResponse({"description": row["raw_description"]})
 
 
+# ── Job detail API ───────────────────────────────────────────────────
+
+@app.get("/api/jobs/{job_id}/detail")
+async def get_job_detail(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
+    """Return all data needed to render the job detail page as JSON."""
+    try:
+        async with db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)) as cur:
+            job = await cur.fetchone()
+    except Exception as e:
+        logger.error(f"✗ get_job_detail DB error fetching job {job_id}: {e}")
+        return JSONResponse({"error": "Database error"}, status_code=500)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = dict(job)
+
+    try:
+        async with db.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,)) as cur:
+            app_row = await cur.fetchone()
+        application = dict(app_row) if app_row else {}
+
+        async with db.execute("""
+            SELECT a.*, r.label as resume_label
+            FROM analyses a JOIN resumes r ON r.id = a.resume_id
+            WHERE a.job_id = ?
+            ORDER BY a.created_at DESC
+        """, (job_id,)) as cur:
+            analyses = [dict(r) for r in await cur.fetchall()]
+
+        async with db.execute("SELECT id, label FROM resumes ORDER BY created_at DESC") as cur:
+            resumes = [dict(r) for r in await cur.fetchall()]
+    except Exception as e:
+        logger.error(f"✗ get_job_detail DB error fetching related data for job {job_id}: {e}")
+        return JSONResponse({"error": "Database error"}, status_code=500)
+
+    # Parse JSON fields in analyses
+    for analysis in analyses:
+        try:
+            v2_matched = analysis.get("matched_skills_v2", "[]") or "[]"
+            parsed_v2  = json.loads(v2_matched)
+            if parsed_v2:
+                analysis["matched_skills"] = parsed_v2
+            else:
+                v1 = json.loads(analysis.get("matched_skills", "[]") or "[]")
+                analysis["matched_skills"] = [
+                    {"skill": s, "match_type": "exact",
+                     "jd_snippet": "", "resume_snippet": "", "category": "other"}
+                    for s in v1 if isinstance(s, str)
+                ]
+        except Exception:
+            analysis["matched_skills"] = []
+
+        try:
+            v2_missing = analysis.get("missing_skills_v2", "[]") or "[]"
+            parsed_v2  = json.loads(v2_missing)
+            if parsed_v2:
+                analysis["missing_skills"] = parsed_v2
+            else:
+                v1 = json.loads(analysis.get("missing_skills", "[]") or "[]")
+                analysis["missing_skills"] = [
+                    {"skill": s["skill"] if isinstance(s, dict) else s,
+                     "severity": s.get("severity", "minor") if isinstance(s, dict) else "minor",
+                     "requirement_type": s.get("requirement_type", "preferred") if isinstance(s, dict) else "preferred",
+                     "jd_snippet": "", "category": "other"}
+                    for s in v1
+                ]
+        except Exception:
+            analysis["missing_skills"] = []
+
+        try:
+            pb = analysis.get("penalty_breakdown")
+            if isinstance(pb, str):
+                analysis["penalty_breakdown"] = json.loads(pb)
+        except Exception:
+            analysis["penalty_breakdown"] = {}
+
+        try:
+            sugg = analysis.get("suggestions", "[]") or "[]"
+            analysis["suggestions"] = json.loads(sugg) if isinstance(sugg, str) else sugg
+        except Exception:
+            analysis["suggestions"] = []
+
+        if not analysis.get("adjusted_score"):
+            analysis["adjusted_score"] = analysis["score"]
+
+        analysis["used_fallback"] = bool(analysis.get("used_fallback", 0))
+
+    text_quality   = assess_job_text_quality(job.get("raw_description") or "")
+    comparison     = build_comparison(analyses)
+    last_resume_id = analyses[0]["resume_id"] if analyses else None
+
+    salary_data = json.loads(job["salary_estimate"]) if job.get("salary_estimate") else None
+    if analyses:
+        last_provider = analyses[0]["llm_provider"]
+        last_model    = analyses[0].get("llm_model", "")
+    elif salary_data and salary_data.get("llm_provider"):
+        last_provider = salary_data["llm_provider"]
+        last_model    = salary_data.get("llm_model", "")
+    else:
+        last_provider = "anthropic"
+        last_model    = ""
+
+    return JSONResponse({
+        "job":              job,
+        "application":      application,
+        "analyses":         analyses,
+        "resumes":          resumes,
+        "ollama_model":     last_model if last_provider == "ollama"    else _ollama_model(),
+        "anthropic_model":  last_model if last_provider == "anthropic" else anthropic_model(),
+        "openai_model":     last_model if last_provider == "openai"    else openai_model(),
+        "gemini_model":     last_model if last_provider == "gemini"    else gemini_model(),
+        "text_quality":     text_quality,
+        "comparison":       comparison,
+        "analysis_mode":    analyses[0].get("analysis_mode") or os.getenv("ANALYSIS_MODE", "standard") if analyses else os.getenv("ANALYSIS_MODE", "standard"),
+        "salary_estimate":  salary_data,
+        "has_salary_in_jd": _job_has_salary(job.get("raw_description", "")),
+        "last_resume_id":   last_resume_id,
+        "last_provider":    last_provider,
+    })
+
+
+# ── Providers status API ─────────────────────────────────────────────
+
+@app.get("/api/providers/status")
+async def get_providers_status():
+    """Return which providers are configured and reachable, plus default models."""
+    import httpx
+    from analyzer.config import ollama_base_url
+
+    has_ollama = False
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            r = await client.get(f"{ollama_base_url()}/api/tags")
+            has_ollama = r.status_code == 200
+    except Exception:
+        pass
+
+    return JSONResponse({
+        "has_anthropic":   bool(os.getenv("ANTHROPIC_API_KEY", "")),
+        "has_openai":      bool(os.getenv("OPENAI_API_KEY", "")),
+        "has_gemini":      bool(os.getenv("GEMINI_API_KEY", "")),
+        "has_ollama":      has_ollama,
+        "anthropic_model": anthropic_model(),
+        "openai_model":    openai_model(),
+        "gemini_model":    gemini_model(),
+        "ollama_model":    _ollama_model(),
+    })
+
+
 # ── Ollama models proxy ──────────────────────────────────────────────────────
 
 @app.get("/api/ollama/models")
