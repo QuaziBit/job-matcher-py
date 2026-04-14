@@ -377,7 +377,10 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         jid = resp.json()["job_id"]
         page = await self.client.get(f"/job/{jid}")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"Accessible Job", page.content)
+        # Page is now a static shell — job data served via /api/jobs/{id}/detail
+        self.assertIn(b"job-detail-main", page.content)
+        detail = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertIn("Accessible Job", detail.json()["job"]["title"])
 
     # ── GET /jobs/preview ──────────────────────────────────────────────────────
 
@@ -989,8 +992,10 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
 
         resp = await self.client.get(f"/job/{jid}")
         self.assertEqual(resp.status_code, 200)
-        # gpt-4o should appear as the pre-selected model in the page
-        self.assertIn(b"gpt-4o", resp.content)
+        # Model pre-selection is now served via /api/jobs/{id}/detail
+        detail = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(detail.json()["openai_model"], "gpt-4o")
+        self.assertEqual(detail.json()["last_provider"], "openai")
 
     @patch("main.scrape_job")
     @patch("main.analyze_match")
@@ -1021,8 +1026,9 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
 
         resp = await self.client.get(f"/job/{jid}")
         self.assertEqual(resp.status_code, 200)
-        # fast option should be selected in the mode dropdown
-        self.assertIn(b'value="fast"', resp.content)
+        # Analysis mode pre-selection is now served via /api/jobs/{id}/detail
+        detail = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(detail.json()["analysis_mode"], "fast")
 
     @patch("main.scrape_job")
     async def test_job_detail_no_analyses_uses_env_defaults(self, mock_scrape):
@@ -1036,8 +1042,11 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
 
         resp = await self.client.get(f"/job/{jid}")
         self.assertEqual(resp.status_code, 200)
-        # Page should render without error — defaults applied
-        self.assertIn(b"Run New Analysis", resp.content)
+        # Static shell always renders — verify defaults via API
+        self.assertIn(b"job-detail-main", resp.content)
+        detail = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(detail.json()["analyses"], [])
+        self.assertEqual(detail.json()["last_provider"], "anthropic")
 
     @patch("main.scrape_job")
     async def test_job_detail_hides_anthropic_when_no_key(self, mock_scrape):
@@ -1054,7 +1063,9 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         try:
             resp = await self.client.get(f"/job/{jid}")
             self.assertEqual(resp.status_code, 200)
-            self.assertNotIn(b'value="anthropic"', resp.content)
+            # Provider availability now served via /api/providers/status
+            status = await self.client.get("/api/providers/status")
+            self.assertFalse(status.json()["has_anthropic"])
         finally:
             if orig is not None:
                 os.environ["ANTHROPIC_API_KEY"] = orig
@@ -1075,7 +1086,9 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         try:
             resp = await self.client.get(f"/job/{jid}")
             self.assertEqual(resp.status_code, 200)
-            self.assertIn(b'value="anthropic"', resp.content)
+            # Provider availability now served via /api/providers/status
+            status = await self.client.get("/api/providers/status")
+            self.assertTrue(status.json()["has_anthropic"])
         finally:
             if orig is not None:
                 os.environ["ANTHROPIC_API_KEY"] = orig
@@ -1098,7 +1111,9 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         try:
             resp = await self.client.get(f"/job/{jid}")
             self.assertEqual(resp.status_code, 200)
-            self.assertIn(b'value="openai"', resp.content)
+            # Provider availability now served via /api/providers/status
+            status = await self.client.get("/api/providers/status")
+            self.assertTrue(status.json()["has_openai"])
         finally:
             if orig is not None:
                 os.environ["OPENAI_API_KEY"] = orig
@@ -1120,14 +1135,20 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         try:
             resp = await self.client.get(f"/job/{jid}")
             self.assertEqual(resp.status_code, 200)
-            self.assertNotIn(b'value="openai"', resp.content)
+            # Provider availability now served via /api/providers/status
+            status = await self.client.get("/api/providers/status")
+            self.assertFalse(status.json()["has_openai"])
         finally:
             if orig is not None:
                 os.environ["OPENAI_API_KEY"] = orig
 
     async def test_job_detail_404_for_missing(self):
+        """Page shell always returns 200 — 404 is served by the API endpoint."""
         resp = await self.client.get("/job/9999")
-        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"job-detail-main", resp.content)
+        api_resp = await self.client.get("/api/jobs/9999/detail")
+        self.assertEqual(api_resp.status_code, 404)
 
     @patch("main.scrape_job")
     async def test_job_detail_page_renders(self, mock_scrape):
@@ -1139,7 +1160,9 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         jid = j.json()["job_id"]
         resp = await self.client.get(f"/job/{jid}")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"DevSecOps Engineer", resp.content)
+        # Page is now a static shell — job data served via /api/jobs/{id}/detail
+        self.assertIn(b"job-detail-main", resp.content)
+        self.assertIn(b"app.js", resp.content)
 
 
 class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
@@ -1208,9 +1231,12 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
 
         page = await self.client.get(f"/job/{job_id}")
         self.assertEqual(page.status_code, 200)
-        content = page.content.decode()
-        self.assertIn("DevSecOps Engineer", content)
-        self.assertIn("Acme Federal", content)
+        # Page is now a static shell — job data served via /api/jobs/{id}/detail
+        self.assertIn(b"job-detail-main", page.content)
+        detail = await self.client.get(f"/api/jobs/{job_id}/detail")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["job"]["title"], "DevSecOps Engineer")
+        self.assertEqual(detail.json()["job"]["company"], "Acme Federal")
 
         import aiosqlite
         async with aiosqlite.connect(self.tmp.name) as db:

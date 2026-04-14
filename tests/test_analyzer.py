@@ -434,6 +434,31 @@ class TestModelCapMode(unittest.TestCase):
         # llama3.1:8b-instruct should match llama3.1:8b entry
         self.assertEqual(cap_mode_for_model("detailed", "llama3.1:8b-instruct"), "detailed")
 
+    def test_gemma3n_e4b_allows_detailed(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "gemma3n:e4b"), "detailed")
+        self.assertEqual(cap_mode_for_model("standard", "gemma3n:e4b"), "standard")
+        self.assertEqual(cap_mode_for_model("fast",     "gemma3n:e4b"), "fast")
+
+    def test_qwen25_coder_7b_allows_detailed(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "qwen2.5-coder:7b"), "detailed")
+        self.assertEqual(cap_mode_for_model("standard", "qwen2.5-coder:7b"), "standard")
+        self.assertEqual(cap_mode_for_model("fast",     "qwen2.5-coder:7b"), "fast")
+
+    def test_qwen25_coder_14b_allows_detailed(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "qwen2.5-coder:14b"), "detailed")
+
+    def test_qwen25_coder_32b_allows_detailed(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "qwen2.5-coder:32b"), "detailed")
+
+    def test_qwen25_7b_still_capped_at_standard(self):
+        # qwen2.5:7b (base, not coder) should remain standard
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "qwen2.5:7b"), "standard")
+
 
 class TestBuildSystemPromptModes(unittest.TestCase):
     """Tests for analyzer.prompts.build_system_prompt — mode-specific schemas."""

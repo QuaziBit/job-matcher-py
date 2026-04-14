@@ -42,7 +42,10 @@
   <div  id="progress-fill"></div>
   <span id="progress-meta"></span>
 </div>
-<input id="filter-search"   type="text"   value="">
+<input id="filter-search"    type="text"   value="">
+<input id="filter-date"      type="text"   value="" style="display:none">
+<input id="filter-date-from" type="text"   value="" style="display:none">
+<input id="filter-date-to"   type="text"   value="" style="display:none">
 <select id="filter-status">
   <option value=""></option>
   <option value="applied">applied</option>
@@ -60,7 +63,7 @@
 </select>
 
 <!-- ── Load app.js ──────────────────────────────────────────────────────── -->
-<script src="../static/js/app.js"></script>
+<script src="../ui/static/js/app.js"></script>
 
 <!-- ── Test runner ──────────────────────────────────────────────────────── -->
 <script>
@@ -69,10 +72,9 @@
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 const output = [];
-let _passed = 0, _failed = 0, _currentSection = "";
+let _passed = 0, _failed = 0;
 
 function section(name) {
-  _currentSection = name;
   output.push({ type: "section", name });
   console.log(`\n── ${name}`);
 }
@@ -93,392 +95,565 @@ function test(name, fn) {
 function assert(condition, msg) {
   if (!condition) throw new Error(msg || "assertion failed");
 }
-
 function assertEqual(a, b) {
   if (a !== b) throw new Error(`expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
 }
-
 function assertContains(str, sub) {
-  if (!str.includes(sub)) throw new Error(`expected "${str}" to contain "${sub}"`);
+  if (!str.includes(sub)) throw new Error(`expected string to contain "${sub}"\ngot: ${str.slice(0,300)}`);
 }
-
+function assertNotContains(str, sub) {
+  if (str.includes(sub)) throw new Error(`expected string NOT to contain "${sub}"`);
+}
 function assertClass(el, cls) {
   if (!el.classList.contains(cls)) throw new Error(`expected element to have class "${cls}", got "${el.className}"`);
 }
-
 function assertNotClass(el, cls) {
   if (el.classList.contains(cls)) throw new Error(`expected element NOT to have class "${cls}"`);
 }
+function parseHTML(html) {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  return div;
+}
 
 
-// ── formatElapsed ─────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// ── Utility functions
+// ════════════════════════════════════════════════════════════════════════════
+
+section("escHtml");
+
+test("escapes ampersand",        () => assertContains(escHtml("a&b"),    "&amp;"));
+test("escapes less-than",        () => assertContains(escHtml("a<b"),    "&lt;"));
+test("escapes greater-than",     () => assertContains(escHtml("a>b"),    "&gt;"));
+test("escapes double quote",     () => assertContains(escHtml('a"b'),    "&quot;"));
+test("escapes single quote",     () => assertContains(escHtml("a'b"),    "&#39;"));
+test("leaves safe string alone", () => assertEqual(escHtml("hello"),     "hello"));
+test("handles null",             () => assertEqual(escHtml(null),        ""));
+test("handles number",           () => assertEqual(escHtml(42),          "42"));
+test("escapes XSS payload",      () => { const o = escHtml('<script>alert("xss")</sc' + 'ript>'); assertNotContains(o, "<script>"); assertContains(o, "&lt;script&gt;"); });
+
 
 section("formatElapsed");
 
-test("0 seconds", ()    => assertEqual(formatElapsed(0),    "0s"));
-test("1 second", ()     => assertEqual(formatElapsed(1),    "1s"));
-test("45 seconds", ()   => assertEqual(formatElapsed(45),   "45s"));
-test("59 seconds", ()   => assertEqual(formatElapsed(59),   "59s"));
-test("60 seconds = 1:00", () => assertEqual(formatElapsed(60),   "1:00"));
-test("90 seconds = 1:30", () => assertEqual(formatElapsed(90),   "1:30"));
-test("61 seconds = 1:01", () => assertEqual(formatElapsed(61),   "1:01"));
-test("3600 seconds = 60:00", () => assertEqual(formatElapsed(3600), "60:00"));
-test("3661 seconds = 61:01", () => assertEqual(formatElapsed(3661), "61:01"));
-test("pads single-digit seconds", () => assertEqual(formatElapsed(65), "1:05"));
+test("0 seconds",             () => assertEqual(formatElapsed(0),    "0s"));
+test("45 seconds",            () => assertEqual(formatElapsed(45),   "45s"));
+test("59 seconds",            () => assertEqual(formatElapsed(59),   "59s"));
+test("60 seconds = 1:00",     () => assertEqual(formatElapsed(60),   "1:00"));
+test("90 seconds = 1:30",     () => assertEqual(formatElapsed(90),   "1:30"));
+test("61 seconds = 1:01",     () => assertEqual(formatElapsed(61),   "1:01"));
+test("pads single-digit secs",() => assertEqual(formatElapsed(65),   "1:05"));
+test("3600 seconds = 60:00",  () => assertEqual(formatElapsed(3600), "60:00"));
 
 
-// ── toast ─────────────────────────────────────────────────────────────────────
+section("formatDuration");
+
+test("0 returns empty",          () => assertEqual(formatDuration(0),   ""));
+test("null returns empty",        () => assertEqual(formatDuration(null),""));
+test("30 seconds",                () => assertEqual(formatDuration(30),  "30s"));
+test("60 seconds = 1m",           () => assertEqual(formatDuration(60),  "1m"));
+test("90 seconds = 1m 30s",       () => assertEqual(formatDuration(90),  "1m 30s"));
+test("120 seconds = 2m",          () => assertEqual(formatDuration(120), "2m"));
+test("rounds to nearest second",  () => assertEqual(formatDuration(30.4),"30s"));
+
+
+section("getLocationFlag");
+
+test("remote keyword",           () => assertEqual(getLocationFlag("Remote"),          "REMOTE"));
+test("Canada city",              () => assertEqual(getLocationFlag("Toronto, ON"),     "CA"));
+test("UK city",                  () => assertEqual(getLocationFlag("London, UK"),      "UK"));
+test("Germany city",             () => assertEqual(getLocationFlag("Berlin, Germany"), "DE"));
+test("USA explicit",             () => assertEqual(getLocationFlag("United States"),   "US"));
+test("unknown defaults to US",   () => assertEqual(getLocationFlag("Springfield"),     "US"));
+test("numeric-only returns N/A", () => assertEqual(getLocationFlag("12345"),           "N/A"));
+test("empty string returns N/A", () => assertEqual(getLocationFlag(""),                "N/A"));
+test("null returns N/A",         () => assertEqual(getLocationFlag(null),              "N/A"));
+test("Singapore",                () => assertEqual(getLocationFlag("Singapore"),       "SG"));
+
+
+section("formatJobDate");
+
+test("empty string returns empty",       () => assertEqual(formatJobDate(""), ""));
+test("null returns empty",               () => assertEqual(formatJobDate(null), ""));
+test("returns non-empty for valid date", () => { const o = formatJobDate("2024-06-15 12:00:00"); assert(o.length > 0); assertContains(o, "Jun"); });
+test("includes year for old date",       () => assertContains(formatJobDate("2020-06-15 12:00:00"), "2020"));
+
+
+section("log / logErr");
+
+test("log does not throw",    () => log("test", "message", { extra: 1 }));
+test("logErr does not throw", () => logErr("test", "error",  new Error("oops")));
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── TMPL — Primitives
+// ════════════════════════════════════════════════════════════════════════════
+
+section("TMPL.spinner");
+
+test("no label — contains spinner span",   () => assertContains(TMPL.spinner(), 'class="spinner"'));
+test("with label — contains label text",   () => assertContains(TMPL.spinner("Loading…"), "Loading"));
+test("with label — contains spinner span", () => assertContains(TMPL.spinner("Loading…"), 'class="spinner"'));
+test("no label — clean output",            () => assertEqual(TMPL.spinner().trim(), '<span class="spinner"></span>'));
+
+
+section("TMPL.spinnerSm");
+
+test("contains size styles",          () => { assertContains(TMPL.spinnerSm(), "width:10px"); assertContains(TMPL.spinnerSm(), "height:10px"); });
+test("with label — appends label",    () => assertContains(TMPL.spinnerSm("saving…"), "saving"));
+test("no label — no undefined text",  () => assertNotContains(TMPL.spinnerSm(), "undefined"));
+
+
+section("TMPL.emptyPanel");
+
+test("wraps message in .empty div",  () => assertContains(TMPL.emptyPanel("No results"), 'class="empty"'));
+test("contains message text",        () => assertContains(TMPL.emptyPanel("No results"), "No results"));
+test("escapes HTML in message",      () => assertContains(TMPL.emptyPanel("<b>bad</b>"),  "&lt;b&gt;"));
+
+
+section("TMPL.snippetToggle");
+
+test("open=true returns down arrow",  () => { const h = TMPL.snippetToggle(true); assert(h.includes("&#9660;") || h.includes("▼"), `missing down arrow in: ${h}`); });
+test("open=false returns right arrow",() => { const h = TMPL.snippetToggle(false); assert(h.includes("&#9658;") || h.includes("►"), `missing right arrow in: ${h}`); });
+test("open and closed differ",        () => assert(TMPL.snippetToggle(true) !== TMPL.snippetToggle(false)));
+
+
+section("TMPL.saveBtn / rerunBtn / salaryBtn");
+
+test("saveBtn returns 'Save'",          () => assertEqual(TMPL.saveBtn(),  "Save"));
+test("rerunBtn returns 're-run'",       () => assertEqual(TMPL.rerunBtn(), "re-run"));
+test("salaryBtn contains money emoji",  () => assertContains(TMPL.salaryBtn(), "💰"));
+test("salaryBtn contains 'Estimate'",   () => assertContains(TMPL.salaryBtn(), "Estimate"));
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── TMPL — Shared components
+// ════════════════════════════════════════════════════════════════════════════
+
+section("TMPL.tqWarning");
+
+test("returns empty for null",         () => assertEqual(TMPL.tqWarning(null), ""));
+test("returns empty for level=ok",     () => assertEqual(TMPL.tqWarning({ level: "ok" }), ""));
+test("returns empty for no level",     () => assertEqual(TMPL.tqWarning({}), ""));
+test("renders for level=low",          () => assertContains(TMPL.tqWarning({ level:"low", issues:[], char_count:100, tech_keywords:3 }), "level-low"));
+test("renders issue list items",       () => {
+  const h = TMPL.tqWarning({ level:"low", issues:["Too short","No tech"], char_count:50, tech_keywords:1 });
+  assertContains(h, "Too short"); assertContains(h, "No tech"); assertContains(h, "<li>");
+});
+test("shows char_count",               () => assertContains(TMPL.tqWarning({ level:"low", issues:[], char_count:200, tech_keywords:5 }), "200"));
+test("shows tech_keywords",            () => assertContains(TMPL.tqWarning({ level:"low", issues:[], char_count:0,   tech_keywords:5 }), "5"));
+test("applies style attribute",        () => assertContains(TMPL.tqWarning({ level:"low", issues:[], char_count:0, tech_keywords:0 }, "margin-top:14px;"), "margin-top:14px;"));
+test("escapes HTML in issues",         () => { const h = TMPL.tqWarning({ level:"low", issues:["<script>xss</sc" + "ript>"], char_count:0, tech_keywords:0 }); assertNotContains(h, "<script>"); assertContains(h, "&lt;script&gt;"); });
+
+
+section("TMPL.providerRadio");
+
+test("correct value attribute",        () => assertContains(TMPL.providerRadio("ollama", "Ollama", false), 'value="ollama"'));
+test("correct label text",             () => assertContains(TMPL.providerRadio("ollama", "Ollama", false), "Ollama"));
+test("checked=true adds checked",      () => assertContains(TMPL.providerRadio("anthropic", "Anthropic", true), "checked"));
+test("checked=false no checked attr",  () => assertNotContains(TMPL.providerRadio("openai", "OpenAI", false), "checked"));
+test("id and for are linked",          () => { const h = TMPL.providerRadio("gemini","Gemini",false); assertContains(h,'id="p-gemini"'); assertContains(h,'for="p-gemini"'); });
+
+
+section("TMPL.providerRadios");
+
+test("empty providers returns ''",              () => assertEqual(TMPL.providerRadios({}, "anthropic"), ""));
+test("renders anthropic when available",        () => assertContains(TMPL.providerRadios({ has_anthropic:true }, "anthropic"), "anthropic"));
+test("skips ollama when unavailable",           () => assertNotContains(TMPL.providerRadios({ has_anthropic:true }, "anthropic"), "ollama"));
+test("checks lastProvider radio",               () => { const d = parseHTML(TMPL.providerRadios({ has_anthropic:true, has_ollama:true }, "ollama")); const c = d.querySelector('input[value="ollama"]'); assert(c && c.checked, "ollama should be checked"); });
+test("anthropic checked when lastProvider ''",  () => assertContains(TMPL.providerRadios({ has_anthropic:true }, ""), "checked"));
+
+
+section("TMPL.resumeSelect");
+
+test("empty — shows no-resumes message",  () => assertContains(TMPL.resumeSelect([], null), "No resumes yet"));
+test("empty — link to /resumes",          () => assertContains(TMPL.resumeSelect([], null), "/resumes"));
+test("with resumes — renders select",     () => assertContains(TMPL.resumeSelect([{id:1,label:"v1"}], null), "<select"));
+test("renders option per resume",         () => { const h = TMPL.resumeSelect([{id:1,label:"v1"},{id:2,label:"v2"}],null); assertContains(h,'value="1"'); assertContains(h,'value="2"'); });
+test("marks last_resume_id selected",     () => { const d = parseHTML(TMPL.resumeSelect([{id:1,label:"v1"},{id:2,label:"v2"}],2)); assertEqual(parseInt(d.querySelector("select").value), 2); });
+test("escapes HTML in label",             () => { assertNotContains(TMPL.resumeSelect([{id:1,label:"<bad>"}],null), "<bad>"); assertContains(TMPL.resumeSelect([{id:1,label:"<bad>"}],null), "&lt;bad&gt;"); });
+
+
+section("TMPL.modeOptions");
+
+test("renders 3 options",               () => assertEqual(parseHTML(TMPL.modeOptions("standard")).querySelectorAll("option").length, 3));
+test("fast option exists",              () => assertContains(TMPL.modeOptions("fast"),     'value="fast"'));
+test("standard option exists",          () => assertContains(TMPL.modeOptions("standard"), 'value="standard"'));
+test("detailed option exists",          () => assertContains(TMPL.modeOptions("detailed"), 'value="detailed"'));
+test("selected=fast marks fast",        () => assertEqual(parseHTML(`<select>${TMPL.modeOptions("fast")}</select>`).querySelector("select").value, "fast"));
+test("selected=detailed marks detailed",() => assertEqual(parseHTML(`<select>${TMPL.modeOptions("detailed")}</select>`).querySelector("select").value, "detailed"));
+
+
+section("TMPL.appStatusOptions");
+
+test("renders 5 options",                    () => assertEqual(parseHTML(`<select>${TMPL.appStatusOptions("not_applied")}</select>`).querySelectorAll("option").length, 5));
+test("not_applied option exists",            () => assertContains(TMPL.appStatusOptions("not_applied"), 'value="not_applied"'));
+test("interviewing option exists",           () => assertContains(TMPL.appStatusOptions("interviewing"), 'value="interviewing"'));
+test("current status is selected",           () => assertEqual(parseHTML(`<select>${TMPL.appStatusOptions("interviewing")}</select>`).querySelector("select").value, "interviewing"));
+test("null defaults to not_applied",         () => assertEqual(parseHTML(`<select>${TMPL.appStatusOptions(null)}</select>`).querySelector("select").value, "not_applied"));
+
+
+section("TMPL.salaryAction");
+
+test("null sal — shows Estimate button",       () => assertContains(TMPL.salaryAction(null, 1, false), "Estimate Salary"));
+test("null sal + hasInJd — shows Extract",     () => assertContains(TMPL.salaryAction(null, 1, true),  "Extract"));
+test("null sal — correct onclick job id",      () => assertContains(TMPL.salaryAction(null, 5, false), "estimateSalary(5)"));
+test("with sal — shows cached label",          () => assertContains(TMPL.salaryAction({source:"estimated"}, 1, false), "cached"));
+test("with sal — shows re-run button",         () => assertContains(TMPL.salaryAction({source:"estimated"}, 1, false), "re-run"));
+test("with sal — rerun correct job id",        () => assertContains(TMPL.salaryAction({source:"estimated"}, 7, false), "rerunSalaryEstimate(7)"));
+test("with sal — escapes source",              () => assertNotContains(TMPL.salaryAction({source:"<bad>"}, 1, false), "<bad>"));
+
+
+section("TMPL.salaryBadge");
+
+test("null returns ''",                () => assertEqual(TMPL.salaryBadge(null, 1), ""));
+test("renders salary-badge-wrap",      () => assertContains(TMPL.salaryBadge({min:80000,max:120000,confidence:"high",source:"estimated",llm_provider:"anthropic"}, 1), "salary-badge-wrap"));
+test("shows formatted min",            () => assertContains(TMPL.salaryBadge({min:80000,max:120000,confidence:"high",source:"estimated",llm_provider:"anthropic"}, 1), "80,000"));
+test("shows formatted max",            () => assertContains(TMPL.salaryBadge({min:80000,max:120000,confidence:"high",source:"estimated",llm_provider:"anthropic"}, 1), "120,000"));
+test("posted source shows pin emoji",  () => assertContains(TMPL.salaryBadge({min:100000,max:150000,confidence:"high",source:"posted",llm_provider:"anthropic"}, 1), "📌"));
+test("estimated source shows ~",       () => assertContains(TMPL.salaryBadge({min:1,max:2,confidence:"medium",source:"estimated",llm_provider:"anthropic"}, 1), "~"));
+test("clear button correct job id",    () => assertContains(TMPL.salaryBadge({min:1,max:2,confidence:"low",source:"estimated",llm_provider:"ollama"}, 9), "clearSalaryEstimate(9)"));
+test("shows confidence level",         () => assertContains(TMPL.salaryBadge({min:1,max:2,confidence:"high",source:"estimated",llm_provider:"anthropic"}, 1), "high"));
+test("shows llm_provider",             () => assertContains(TMPL.salaryBadge({min:1,max:2,confidence:"high",source:"estimated",llm_provider:"gemini"}, 1), "gemini"));
+test("shows llm_model when present",   () => assertContains(TMPL.salaryBadge({min:1,max:2,confidence:"high",source:"estimated",llm_provider:"anthropic",llm_model:"claude-3"}, 1), "claude-3"));
+
+
+section("TMPL.jobUrl");
+
+test("null — pasted description",        () => assertContains(TMPL.jobUrl(null), "pasted description"));
+test("manual:// — pasted description",   () => assertContains(TMPL.jobUrl("manual://abc"), "pasted description"));
+test("real url — anchor tag",            () => assertContains(TMPL.jobUrl("https://example.com/job"), "<a "));
+test("real url — href matches",          () => assertContains(TMPL.jobUrl("https://example.com/job"), "https://example.com/job"));
+test("real url — opens in new tab",      () => assertContains(TMPL.jobUrl("https://example.com"), 'target="_blank"'));
+test("real url — View Original text",    () => assertContains(TMPL.jobUrl("https://example.com"), "View Original"));
+
+
+section("TMPL.jobMeta");
+
+test("shows company",                   () => assertContains(TMPL.jobMeta("Acme", ""), "Acme"));
+test("shows location",                  () => assertContains(TMPL.jobMeta("", "Virginia"), "Virginia"));
+test("shows both",                      () => { const h = TMPL.jobMeta("Acme","Virginia"); assertContains(h,"Acme"); assertContains(h,"Virginia"); });
+test("escapes HTML in company",         () => assertNotContains(TMPL.jobMeta("<b>Corp</b>", ""), "<b>"));
+test("escapes HTML in location",        () => assertNotContains(TMPL.jobMeta("", "<b>DC</b>"), "<b>"));
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── TMPL — Jobs list
+// ════════════════════════════════════════════════════════════════════════════
+
+section("TMPL.jobListItem");
+
+const BASE_JOB = { id:42, title:"Python Dev", company:"Acme", location:"DC", status:"applied", url:"https://example.com", is_manual:false, adjusted_score:4, best_score:4, provider:"anthropic", last_model:"claude-3", has_recruiter:false, scraped_at:null };
+
+test("renders anchor with href",        () => assertContains(TMPL.jobListItem(BASE_JOB), '/job/42'));
+test("renders job title",               () => assertContains(TMPL.jobListItem(BASE_JOB), "Python Dev"));
+test("renders company",                 () => assertContains(TMPL.jobListItem(BASE_JOB), "Acme"));
+test("renders score badge",             () => assertContains(TMPL.jobListItem(BASE_JOB), "score-4"));
+test("renders status badge",            () => assertContains(TMPL.jobListItem(BASE_JOB), "status-applied"));
+test("renders scraped source tag",      () => assertContains(TMPL.jobListItem(BASE_JOB), "scraped"));
+test("renders provider/model tag",      () => assertContains(TMPL.jobListItem(BASE_JOB), "anthropic"));
+test("manual job shows manual tag",     () => assertContains(TMPL.jobListItem({...BASE_JOB, url:"manual://x", is_manual:true}), "manual"));
+test("null score shows dash badge",     () => assertContains(TMPL.jobListItem({...BASE_JOB, adjusted_score:null, best_score:null}), "score-none"));
+test("recruiter shows 👤 badge",        () => assertContains(TMPL.jobListItem({...BASE_JOB, has_recruiter:true}), "👤"));
+test("no title falls back to hostname", () => assertContains(TMPL.jobListItem({...BASE_JOB, title:null, url:"https://careers.example.com/job/1"}), "careers.example.com"));
+test("escapes HTML in title",           () => assertNotContains(TMPL.jobListItem({...BASE_JOB, title:"<script>xss</sc" + "ript>"}), "<script>"));
+test("escapes HTML in company",         () => assertNotContains(TMPL.jobListItem({...BASE_JOB, company:"<b>Evil</b>"}), "<b>"));
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── TMPL — Resumes page
+// ════════════════════════════════════════════════════════════════════════════
+
+section("TMPL.resumeCard");
+
+const BASE_RESUME = { id:5, label:"v2 — tailored", created_at:"2024-06-01 12:00:00", char_count:2400 };
+
+test("renders card div",                 () => assertContains(TMPL.resumeCard(BASE_RESUME), 'class="card'));
+test("renders label",                    () => assertContains(TMPL.resumeCard(BASE_RESUME), "v2 — tailored"));
+test("renders char count",               () => assertContains(TMPL.resumeCard(BASE_RESUME), "2400"));
+test("renders date",                     () => assertContains(TMPL.resumeCard(BASE_RESUME), "2024-06-01"));
+test("delete button correct id",         () => assertContains(TMPL.resumeCard(BASE_RESUME), "deleteResumeAndRefresh(5)"));
+test("escapes HTML in label",            () => assertNotContains(TMPL.resumeCard({...BASE_RESUME, label:"<script>xss</sc" + "ript>"}), "<script>"));
+test("uses content.length when char_count null", () => assertContains(TMPL.resumeCard({id:1,label:"v1",created_at:"",char_count:null,content:"x".repeat(300)}), "300"));
+
+
+section("TMPL.resumesEmpty");
+
+test("renders .empty div",           () => assertContains(TMPL.resumesEmpty(), 'class="empty"'));
+test("contains no-resumes message",  () => assertContains(TMPL.resumesEmpty(), "No resumes saved yet"));
+test("contains empty-icon",          () => assertContains(TMPL.resumesEmpty(), "empty-icon"));
+test("is idempotent",                () => assertEqual(TMPL.resumesEmpty(), TMPL.resumesEmpty()));
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── TMPL — Preview page
+// ════════════════════════════════════════════════════════════════════════════
+
+section("TMPL.previewBlockerList / previewTqIssues");
+
+test("blockerList renders one li per keyword",  () => { const h = TMPL.previewBlockerList(["clearance","citizenship"]); assertEqual(parseHTML(h).querySelectorAll("li").length, 2); assertContains(h,"clearance"); });
+test("blockerList escapes HTML",                () => assertNotContains(TMPL.previewBlockerList(["<b>bad</b>"]), "<b>"));
+test("blockerList empty array returns ''",      () => assertEqual(TMPL.previewBlockerList([]), ""));
+test("tqIssues renders one li per issue",       () => assertEqual(parseHTML(TMPL.previewTqIssues(["Too short","No skills"])).querySelectorAll("li").length, 2));
+test("tqIssues escapes HTML",                   () => assertNotContains(TMPL.previewTqIssues(["<script>"]), "<script>"));
+test("tqIssues empty array returns ''",         () => assertEqual(TMPL.previewTqIssues([]), ""));
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── TMPL — Job detail sub-sections
+// ════════════════════════════════════════════════════════════════════════════
+
+section("TMPL.scoreExplainer");
+
+test("renders details element",          () => assertContains(TMPL.scoreExplainer(), "<details"));
+test("renders summary text",             () => assertContains(TMPL.scoreExplainer(), "How are scores calculated"));
+test("renders Blocker row",              () => assertContains(TMPL.scoreExplainer(), "Blocker"));
+test("renders Major row",                () => assertContains(TMPL.scoreExplainer(), "Major"));
+test("renders Minor row",                () => assertContains(TMPL.scoreExplainer(), "Minor"));
+test("renders Count row",                () => assertContains(TMPL.scoreExplainer(), "Count"));
+test("renders score-explainer-table",    () => assertContains(TMPL.scoreExplainer(), "score-explainer-table"));
+test("is idempotent",                    () => assertEqual(TMPL.scoreExplainer(), TMPL.scoreExplainer()));
+
+
+section("TMPL.progressBar");
+
+test("renders analysis-progress id",    () => assertContains(TMPL.progressBar(), 'id="analysis-progress"'));
+test("initially hidden",                () => assertContains(TMPL.progressBar(), "hidden"));
+test("contains progress-fill id",       () => assertContains(TMPL.progressBar(), 'id="progress-fill"'));
+test("contains progress-label id",      () => assertContains(TMPL.progressBar(), 'id="progress-label"'));
+test("is idempotent",                   () => assertEqual(TMPL.progressBar(), TMPL.progressBar()));
+
+
+section("TMPL.cloudModelRow / ollamaModelRow");
+
+const SAMPLE_D = { anthropic_model:"claude-3", openai_model:"gpt-4", gemini_model:"gemini-pro", ollama_model:"llama3.1:8b" };
+
+test("cloudModelRow has correct id",       () => assertContains(TMPL.cloudModelRow(SAMPLE_D), 'id="cloud-model-row"'));
+test("cloudModelRow initially hidden",     () => assertContains(TMPL.cloudModelRow(SAMPLE_D), "display:none"));
+test("cloudModelRow stores anthropic",     () => assertContains(TMPL.cloudModelRow(SAMPLE_D), "claude-3"));
+test("cloudModelRow stores openai",        () => assertContains(TMPL.cloudModelRow(SAMPLE_D), "gpt-4"));
+test("cloudModelRow stores gemini",        () => assertContains(TMPL.cloudModelRow(SAMPLE_D), "gemini-pro"));
+test("ollamaModelRow has correct id",      () => assertContains(TMPL.ollamaModelRow(SAMPLE_D), 'id="ollama-model-row"'));
+test("ollamaModelRow initially hidden",    () => assertContains(TMPL.ollamaModelRow(SAMPLE_D), "display:none"));
+test("ollamaModelRow shows model value",   () => assertContains(TMPL.ollamaModelRow(SAMPLE_D), "llama3.1:8b"));
+test("ollamaModelRow no undefined",        () => assertNotContains(TMPL.ollamaModelRow({}), "undefined"));
+
+
+section("TMPL.compareTabBtn / compareTab");
+
+test("compareTabBtn null returns ''",          () => assertEqual(TMPL.compareTabBtn(null), ""));
+test("compareTabBtn undefined returns ''",     () => assertEqual(TMPL.compareTabBtn(undefined), ""));
+test("compareTabBtn with comp renders button", () => assertContains(TMPL.compareTabBtn({}), "Compare"));
+test("compareTabBtn has data-tab=compare",     () => assertContains(TMPL.compareTabBtn({}), 'data-tab="compare"'));
+
+const COMP = { resume_a:{resume_label:"v1",adjusted_score:4,matched_skills:[],missing_skills:[]}, resume_b:{resume_label:"v2",adjusted_score:3,matched_skills:[],missing_skills:[]}, better_fit:"v1", better_reason:"more skills" };
+
+test("compareTab null returns ''",             () => assertEqual(TMPL.compareTab(null), ""));
+test("compareTab renders compare-panel",       () => assertContains(TMPL.compareTab(COMP), "compare-panel"));
+test("compareTab shows both resume labels",    () => { assertContains(TMPL.compareTab(COMP),"v1"); assertContains(TMPL.compareTab(COMP),"v2"); });
+test("compareTab shows better_reason",         () => assertContains(TMPL.compareTab(COMP), "more skills"));
+test("compareTab escapes HTML in label",       () => { const c = {...COMP, resume_a:{...COMP.resume_a, resume_label:"<script>"}}; assertNotContains(TMPL.compareTab(c), "<script>"); });
+
+
+section("TMPL.pageHeader");
+
+test("renders page-header div",     () => assertContains(TMPL.pageHeader({id:1,title:"Dev"}, "not_applied","not applied","",""), "page-header"));
+test("renders job title",           () => assertContains(TMPL.pageHeader({id:1,title:"Sr Dev"}, "applied","applied","",""), "Sr Dev"));
+test("renders status badge",        () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "applied","applied","",""), "status-applied"));
+test("renders delete button",       () => assertContains(TMPL.pageHeader({id:5,title:"x"}, "not_applied","not applied","",""), "deleteJob(5)"));
+test("renders back link",           () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "not_applied","not applied","",""), "← Back"));
+test("injects urlHtml",             () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "not_applied","not applied","URL_HTML",""), "URL_HTML"));
+test("injects salaryHtml",          () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "not_applied","not applied","","SALARY_HTML"), "SALARY_HTML"));
+test("escapes title",               () => assertNotContains(TMPL.pageHeader({id:1,title:"<b>bad</b>"}, "not_applied","not applied","",""), "<b>"));
+test("untitled fallback",           () => assertContains(TMPL.pageHeader({id:1}, "not_applied","not applied","",""), "Untitled Job"));
+
+
+section("TMPL.applicationTab");
+
+const BASE_APP = { status:"applied", recruiter_name:"Jane", recruiter_email:"j@example.com", recruiter_phone:"555-1234", notes:"Good contact" };
+
+test("renders application tab-content",  () => assertContains(TMPL.applicationTab({id:1}, BASE_APP), 'data-tab-content="application"'));
+test("renders app-status select",        () => assertContains(TMPL.applicationTab({id:1}, BASE_APP), 'id="app-status"'));
+test("renders recruiter name",           () => assertContains(TMPL.applicationTab({id:1}, BASE_APP), "Jane"));
+test("renders recruiter email",          () => assertContains(TMPL.applicationTab({id:1}, BASE_APP), "j@example.com"));
+test("renders recruiter phone",          () => assertContains(TMPL.applicationTab({id:1}, BASE_APP), "555-1234"));
+test("renders notes",                    () => assertContains(TMPL.applicationTab({id:1}, BASE_APP), "Good contact"));
+test("save button correct job id",       () => assertContains(TMPL.applicationTab({id:7}, BASE_APP), "saveApplication(7)"));
+test("escapes HTML in notes",            () => assertNotContains(TMPL.applicationTab({id:1}, {...BASE_APP, notes:"<script>xss</sc" + "ript>"}), "<script>"));
+test("handles empty app object",         () => assert(TMPL.applicationTab({id:1}, {}).length > 0));
+
+
+section("TMPL.descriptionTab");
+
+test("renders description tab-content", () => assertContains(TMPL.descriptionTab({id:1}, {}), 'data-tab-content="description"'));
+test("renders desc-box div",            () => assertContains(TMPL.descriptionTab({id:1}, {}), 'id="desc-box"'));
+test("toggle button correct job id",    () => assertContains(TMPL.descriptionTab({id:3}, {}), "toggleDesc(3)"));
+test("renders tqWarning when present",  () => assertContains(TMPL.descriptionTab({id:1}, {level:"low",issues:["Short"],char_count:50,tech_keywords:1}), "level-low"));
+test("no tqWarning when level ok",      () => assertNotContains(TMPL.descriptionTab({id:1}, {level:"ok"}), "text-quality-warning"));
+
+
+section("TMPL.tabContainer");
+
+test("renders tab-container div",       () => assertContains(TMPL.tabContainer(null,"","","",""), "tab-container"));
+test("renders Analysis tab",            () => assertContains(TMPL.tabContainer(null,"","","",""), "Analysis"));
+test("renders Application tab",         () => assertContains(TMPL.tabContainer(null,"","","",""), "Application"));
+test("renders Job Description tab",     () => assertContains(TMPL.tabContainer(null,"","","",""), "Job Description"));
+test("renders Compare when comp set",   () => assertContains(TMPL.tabContainer({},"","","",""), "Compare"));
+test("no Compare when comp null",       () => assertNotContains(TMPL.tabContainer(null,"","","",""), "Compare"));
+test("injects analysisTabContent",      () => assertContains(TMPL.tabContainer(null,"ANALYSIS_CONTENT","","",""), "ANALYSIS_CONTENT"));
+test("injects applicationTab",          () => assertContains(TMPL.tabContainer(null,"","APP_TAB","",""), "APP_TAB"));
+test("injects descriptionTab",          () => assertContains(TMPL.tabContainer(null,"","","DESC_TAB",""), "DESC_TAB"));
+test("injects compareTab",              () => assertContains(TMPL.tabContainer(null,"","","","CMP_TAB"), "CMP_TAB"));
+
+
+section("TMPL.analysesSection");
+
+test("empty — returns emptyPanel",      () => assertContains(TMPL.analysesSection([]), 'class="empty"'));
+test("with analyses — section title",   () => { const a = {id:1,score:4,adjusted_score:4,llm_provider:"anthropic",resume_label:"v1",created_at:"2024-01-01",matched_skills:[],missing_skills:[],suggestions:[],penalty_breakdown:{}}; assertContains(TMPL.analysesSection([a]), "Past Analyses"); });
+test("with analyses — analysis-block",  () => { const a = {id:2,score:3,adjusted_score:3,llm_provider:"ollama",resume_label:"v2",created_at:"2024-01-01",matched_skills:[],missing_skills:[],suggestions:[],penalty_breakdown:{}}; assertContains(TMPL.analysesSection([a]), "analysis-2"); });
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── TMPL — Analysis block (detailed)
+// ════════════════════════════════════════════════════════════════════════════
+
+section("TMPL.analysisBlock");
+
+const BASE_ANALYSIS = { id:10, score:4, adjusted_score:3, llm_provider:"anthropic", llm_model:"claude-3", resume_label:"v1", created_at:"2024-06-01 12:00:00", duration_seconds:87, analysis_mode:"standard", used_fallback:false, reasoning:"Good fit.", matched_skills:[], missing_skills:[], suggestions:[], penalty_breakdown:{} };
+
+test("renders analysis-block with id",     () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), 'id="analysis-10"'));
+test("renders raw score badge",            () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "score-4"));
+test("renders adjusted score badge",       () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "score-3"));
+test("shows score diff",                   () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "-1"));
+test("no penalty when scores equal",       () => assertContains(TMPL.analysisBlock({...BASE_ANALYSIS,score:4,adjusted_score:4},0), "no penalty"));
+test("renders resume label",               () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "v1"));
+test("renders provider",                   () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "anthropic"));
+test("renders model name",                 () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "claude-3"));
+test("renders duration",                   () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "1m 27s"));
+test("renders reasoning text",             () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "Good fit."));
+test("renders delete button",              () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "deleteAnalysis(10)"));
+test("renders score meter div",            () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,0), 'id="meter-1"'));
+test("idx shifts meter id",                () => assertContains(TMPL.analysisBlock(BASE_ANALYSIS,2), 'id="meter-3"'));
+test("fallback warning when used",         () => assertContains(TMPL.analysisBlock({...BASE_ANALYSIS,used_fallback:true},0), "analysis-warning"));
+test("no fallback warning when false",     () => assertNotContains(TMPL.analysisBlock(BASE_ANALYSIS,0), "analysis-warning"));
+test("renders matched skills",             () => { const a = {...BASE_ANALYSIS, matched_skills:[{skill:"Python",match_type:"exact",jd_snippet:null}]}; assertContains(TMPL.analysisBlock(a,0),"Python"); assertContains(TMPL.analysisBlock(a,0),"Matched skills"); });
+test("renders missing skills",             () => { const a = {...BASE_ANALYSIS, missing_skills:[{skill:"Go",severity:"major",requirement_type:"required",jd_snippet:null}]}; assertContains(TMPL.analysisBlock(a,0),"Go"); assertContains(TMPL.analysisBlock(a,0),"Missing / gaps"); });
+test("renders suggestions",                () => { const a = {...BASE_ANALYSIS, suggestions:[{title:"Add CI/CD",detail:"Highlight pipelines",job_requirement:"CI/CD"}]}; assertContains(TMPL.analysisBlock(a,0),"Add CI/CD"); assertContains(TMPL.analysisBlock(a,0),"Resume Suggestions"); });
+test("renders score breakdown on penalty", () => { const a = {...BASE_ANALYSIS, missing_skills:[{skill:"K8s",severity:"blocker",requirement_type:"required",jd_snippet:null}], penalty_breakdown:{total_penalty:2}}; assertContains(TMPL.analysisBlock(a,0),"Score Breakdown"); assertContains(TMPL.analysisBlock(a,0),"BLOCKER"); });
+test("escapes HTML in reasoning",          () => assertNotContains(TMPL.analysisBlock({...BASE_ANALYSIS,reasoning:"<script>xss</sc" + "ript>"},0), "<script>"));
+test("escapes HTML in skill names",        () => assertNotContains(TMPL.analysisBlock({...BASE_ANALYSIS,matched_skills:[{skill:"<b>Python</b>",match_type:"exact"}]},0), "<b>Python</b>"));
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── DOM / controller functions
+// ════════════════════════════════════════════════════════════════════════════
 
 section("toast");
 
-test("shows message text", () => {
-  toast("hello world", "info");
-  assertEqual(document.getElementById("toast").textContent, "hello world");
-});
+test("shows message",      () => { toast("hello", "info");    assertEqual(document.getElementById("toast").textContent, "hello"); });
+test("sets info class",    () => { toast("msg", "info");      assertContains(document.getElementById("toast").className, "info"); });
+test("sets success class", () => { toast("msg", "success");   assertContains(document.getElementById("toast").className, "success"); });
+test("sets error class",   () => { toast("msg", "error");     assertContains(document.getElementById("toast").className, "error"); });
+test("defaults to info",   () => { toast("msg");              assertContains(document.getElementById("toast").className, "info"); });
 
-test("sets info class", () => {
-  toast("msg", "info");
-  assertContains(document.getElementById("toast").className, "info");
-});
-
-test("sets success class", () => {
-  toast("msg", "success");
-  assertContains(document.getElementById("toast").className, "success");
-});
-
-test("sets error class", () => {
-  toast("msg", "error");
-  assertContains(document.getElementById("toast").className, "error");
-});
-
-test("defaults to info type", () => {
-  toast("msg");
-  assertContains(document.getElementById("toast").className, "info");
-});
-
-
-// ── renderMeter ───────────────────────────────────────────────────────────────
 
 section("renderMeter");
 
-test("renders 5 pips", () => {
-  const div = document.createElement("div");
-  renderMeter(3, div);
-  assertEqual(div.querySelectorAll(".score-pip").length, 5);
-});
+test("renders 5 pips",           () => { const d = document.createElement("div"); renderMeter(3,d); assertEqual(d.querySelectorAll(".score-pip").length, 5); });
+test("score 3 — 3 filled",       () => { const d = document.createElement("div"); renderMeter(3,d); assertEqual(d.querySelectorAll(".filled-3").length, 3); });
+test("score 5 — 5 filled",       () => { const d = document.createElement("div"); renderMeter(5,d); assertEqual(d.querySelectorAll(".filled-5").length, 5); });
+test("score 1 — 1 filled",       () => { const d = document.createElement("div"); renderMeter(1,d); assertEqual(d.querySelectorAll(".filled-1").length, 1); });
+test("clears previous content",  () => { const d = document.createElement("div"); d.innerHTML = "<span>old</span>"; renderMeter(2,d); assertEqual(d.querySelectorAll("span").length, 0); });
 
-test("score 3 — 3 filled pips", () => {
-  const div = document.createElement("div");
-  renderMeter(3, div);
-  const filled = div.querySelectorAll(".filled-3").length;
-  assertEqual(filled, 3);
-});
-
-test("score 5 — 5 filled pips", () => {
-  const div = document.createElement("div");
-  renderMeter(5, div);
-  assertEqual(div.querySelectorAll(".filled-5").length, 5);
-});
-
-test("score 1 — 1 filled pip", () => {
-  const div = document.createElement("div");
-  renderMeter(1, div);
-  assertEqual(div.querySelectorAll(".filled-1").length, 1);
-});
-
-test("clears previous content", () => {
-  const div = document.createElement("div");
-  div.innerHTML = "<span>old</span>";
-  renderMeter(2, div);
-  assertEqual(div.querySelectorAll("span").length, 0);
-});
-
-
-// ── hasActiveFilter ───────────────────────────────────────────────────────────
 
 section("hasActiveFilter");
 
-test("false when all filters empty", () => {
-  ["filter-search","filter-status","filter-score","filter-provider"]
-    .forEach(id => { document.getElementById(id).value = ""; });
-  assertEqual(hasActiveFilter(), false);
-});
+test("false when all empty",    () => { ["filter-search","filter-status","filter-score","filter-provider"].forEach(id => { document.getElementById(id).value = ""; }); assertEqual(hasActiveFilter(), false); });
+test("true when search set",    () => { document.getElementById("filter-search").value = "python";    assertEqual(hasActiveFilter(), true); document.getElementById("filter-search").value = ""; });
+test("true when status set",    () => { document.getElementById("filter-status").value = "applied";   assertEqual(hasActiveFilter(), true); document.getElementById("filter-status").value = ""; });
+test("true when score set",     () => { document.getElementById("filter-score").value  = "4";         assertEqual(hasActiveFilter(), true); document.getElementById("filter-score").value  = ""; });
+test("true when provider set",  () => { document.getElementById("filter-provider").value = "anthropic"; assertEqual(hasActiveFilter(), true); document.getElementById("filter-provider").value = ""; });
 
-test("true when search has value", () => {
-  document.getElementById("filter-search").value = "python";
-  assertEqual(hasActiveFilter(), true);
-  document.getElementById("filter-search").value = "";
-});
-
-test("true when status has value", () => {
-  document.getElementById("filter-status").value = "applied";
-  assertEqual(hasActiveFilter(), true);
-  document.getElementById("filter-status").value = "";
-});
-
-test("true when score has value", () => {
-  document.getElementById("filter-score").value = "4";
-  assertEqual(hasActiveFilter(), true);
-  document.getElementById("filter-score").value = "";
-});
-
-test("true when provider has value", () => {
-  document.getElementById("filter-provider").value = "anthropic";
-  assertEqual(hasActiveFilter(), true);
-  document.getElementById("filter-provider").value = "";
-});
-
-
-// ── toggleSnippets ────────────────────────────────────────────────────────────
 
 section("toggleSnippets");
 
-test("shows hidden container", () => {
-  const btn = document.createElement("button");
-  const div = document.createElement("div");
-  div.style.display = "none";
-  btn.after(div); // btn.nextElementSibling = div
-  const wrap = document.createElement("div");
-  wrap.appendChild(btn);
-  wrap.appendChild(div);
-  document.body.appendChild(wrap);
+function makeSnippetDOM(visible) {
+  const wrap = document.createElement("div"), btn = document.createElement("button"), div = document.createElement("div");
+  div.style.display = visible ? "block" : "none";
+  wrap.appendChild(btn); wrap.appendChild(div); document.body.appendChild(wrap);
+  return { wrap, btn, div };
+}
 
-  toggleSnippets(btn);
-  assertEqual(div.style.display, "block");
-  document.body.removeChild(wrap);
-});
+test("shows hidden container",           () => { const {wrap,btn,div} = makeSnippetDOM(false); toggleSnippets(btn); assertEqual(div.style.display,"block");  document.body.removeChild(wrap); });
+test("hides visible container",          () => { const {wrap,btn,div} = makeSnippetDOM(true);  toggleSnippets(btn); assertEqual(div.style.display,"none");   document.body.removeChild(wrap); });
+test("down arrow on expand",             () => { const {wrap,btn}     = makeSnippetDOM(false); toggleSnippets(btn); assertContains(btn.innerHTML,"▼");        document.body.removeChild(wrap); });
+test("right arrow on collapse",          () => { const {wrap,btn}     = makeSnippetDOM(true);  toggleSnippets(btn); assert(btn.innerHTML.includes("&#9658;") || btn.innerHTML.includes("►"), "missing right arrow"); document.body.removeChild(wrap); });
 
-test("hides visible container", () => {
-  const btn = document.createElement("button");
-  const div = document.createElement("div");
-  div.style.display = "block";
-  const wrap = document.createElement("div");
-  wrap.appendChild(btn);
-  wrap.appendChild(div);
-  document.body.appendChild(wrap);
-
-  toggleSnippets(btn);
-  assertEqual(div.style.display, "none");
-  document.body.removeChild(wrap);
-});
-
-test("updates button text to show arrow when expanding", () => {
-  const btn = document.createElement("button");
-  const div = document.createElement("div");
-  div.style.display = "none";
-  const wrap = document.createElement("div");
-  wrap.appendChild(btn);
-  wrap.appendChild(div);
-  document.body.appendChild(wrap);
-
-  toggleSnippets(btn);
-  assertContains(btn.innerHTML, "▼");
-  document.body.removeChild(wrap);
-});
-
-test("updates button text to right arrow when collapsing", () => {
-  const btn = document.createElement("button");
-  const div = document.createElement("div");
-  div.style.display = "block";
-  const wrap = document.createElement("div");
-  wrap.appendChild(btn);
-  wrap.appendChild(div);
-  document.body.appendChild(wrap);
-
-  toggleSnippets(btn);
-  // &#9658; renders as ► in innerHTML
-  assert(btn.innerHTML.includes("&#9658;") || btn.innerHTML.includes("►"), `btn.innerHTML="${btn.innerHTML}" missing right arrow`);
-  document.body.removeChild(wrap);
-});
-
-
-// ── renderJobs ────────────────────────────────────────────────────────────────
 
 section("renderJobs");
 
 function makeJobsDOM() {
-  // Reset jobs-list content and make it visible for tests
-  const list = document.getElementById("jobs-list");
-  list.style.display = "block";
-  list.innerHTML = "";
+  document.getElementById("jobs-list").style.display = "block";
+  document.getElementById("jobs-list").innerHTML = "";
   document.getElementById("no-results").classList.add("hidden");
   document.getElementById("empty-state").classList.add("hidden");
   document.getElementById("pagination-bar").style.display = "none";
-  // Clear all filters
-  ["filter-search","filter-status","filter-score","filter-provider"]
-    .forEach(id => { document.getElementById(id).value = ""; });
+  ["filter-search","filter-status","filter-score","filter-provider"].forEach(id => { document.getElementById(id).value = ""; });
 }
 
-test("renders job links", () => {
-  makeJobsDOM();
-  renderJobs({ total: 1, jobs: [
-    { id: 42, title: "Python Dev", company: "Acme", location: "DC",
-      status: "applied", url: "https://example.com", is_manual: false,
-      adjusted_score: 4, best_score: 4, provider: "anthropic" }
-  ]});
-  const links = document.getElementById("jobs-list").querySelectorAll("a.job-item");
-  assertEqual(links.length, 1);
-});
+const JOB = { id:42, title:"Python Dev", company:"Acme", location:"DC", status:"applied", url:"https://example.com", is_manual:false, adjusted_score:4, best_score:4, provider:"anthropic", has_recruiter:false, scraped_at:null };
 
-test("job link href contains job id", () => {
-  makeJobsDOM();
-  renderJobs({ total: 1, jobs: [
-    { id: 99, title: "Go Dev", company: "Corp", location: "",
-      status: "not_applied", url: "https://example.com", is_manual: false,
-      adjusted_score: null, best_score: null, provider: null }
-  ]});
-  const link = document.getElementById("jobs-list").querySelector("a.job-item");
-  assertContains(link.href, "/job/99");
-});
+test("renders job link",                 () => { makeJobsDOM(); renderJobs({total:1,jobs:[JOB]}); assertEqual(document.getElementById("jobs-list").querySelectorAll("a.job-item").length, 1); });
+test("link href has job id",             () => { makeJobsDOM(); renderJobs({total:1,jobs:[JOB]}); assertContains(document.getElementById("jobs-list").querySelector("a.job-item").href, "/job/42"); });
+test("empty state when no jobs",         () => { makeJobsDOM(); renderJobs({total:0,jobs:[]}); assertNotClass(document.getElementById("empty-state"), "hidden"); });
+test("no-results when filter + no jobs", () => { makeJobsDOM(); document.getElementById("filter-search").value = "xyz"; renderJobs({total:0,jobs:[]}); assertNotClass(document.getElementById("no-results"), "hidden"); document.getElementById("filter-search").value = ""; });
+test("renders score badge",              () => { makeJobsDOM(); renderJobs({total:1,jobs:[JOB]}); assertContains(document.getElementById("jobs-list").innerHTML, "score-4"); });
+test("skips malformed jobs",             () => { makeJobsDOM(); renderJobs({total:2,jobs:[null,JOB]}); assertEqual(document.getElementById("jobs-list").querySelectorAll("a.job-item").length, 1); });
 
-test("shows empty state when no jobs and no filter", () => {
-  makeJobsDOM();
-  renderJobs({ total: 0, jobs: [] });
-  assertNotClass(document.getElementById("empty-state"), "hidden");
-});
-
-test("shows no-results when filter active but no matches", () => {
-  makeJobsDOM();
-  document.getElementById("filter-search").value = "xyz";
-  renderJobs({ total: 0, jobs: [] });
-  assertNotClass(document.getElementById("no-results"), "hidden");
-  document.getElementById("filter-search").value = "";
-});
-
-test("renders score badge when score exists", () => {
-  makeJobsDOM();
-  renderJobs({ total: 1, jobs: [
-    { id: 1, title: "Dev", company: "", location: "", status: "not_applied",
-      url: "https://x.com", is_manual: false, adjusted_score: 5, best_score: 5, provider: "anthropic" }
-  ]});
-  const html = document.getElementById("jobs-list").innerHTML;
-  assertContains(html, "score-5");
-});
-
-test("renders manual tag for manual jobs", () => {
-  makeJobsDOM();
-  renderJobs({ total: 1, jobs: [
-    { id: 2, title: "Pasted", company: "", location: "", status: "not_applied",
-      url: "manual://abc123", is_manual: true, adjusted_score: null, best_score: null, provider: null }
-  ]});
-  const html = document.getElementById("jobs-list").innerHTML;
-  assertContains(html, "manual");
-});
-
-test("skips malformed jobs gracefully", () => {
-  makeJobsDOM();
-  // null job mixed in — should not throw
-  renderJobs({ total: 2, jobs: [
-    null,
-    { id: 3, title: "Good Job", company: "", location: "", status: "not_applied",
-      url: "https://x.com", is_manual: false, adjusted_score: 3, best_score: 3, provider: "ollama" }
-  ]});
-  const links = document.getElementById("jobs-list").querySelectorAll("a.job-item");
-  assertEqual(links.length, 1);
-});
-
-
-// ── renderPagination ──────────────────────────────────────────────────────────
 
 section("renderPagination");
 
 function makePagDOM() {
   document.getElementById("pagination-bar").style.display = "none";
-  document.getElementById("pagination-info").textContent = "";
-  document.getElementById("page-indicator").textContent  = "";
+  document.getElementById("pagination-info").textContent  = "";
+  document.getElementById("page-indicator").textContent   = "";
   document.getElementById("prev-btn").disabled = false;
   document.getElementById("next-btn").disabled = false;
-  // reset _perPage to non-zero so single-page hides bar
   _perPage = 25;
 }
 
-test("shows pagination bar when total > 0 and multiple pages", () => {
-  makePagDOM();
-  _perPage = 5;
-  renderPagination({ page: 1, total_pages: 3, total: 15, per_page: 5 });
-  assertEqual(document.getElementById("pagination-bar").style.display, "flex");
-});
+test("shows bar on multiple pages",  () => { makePagDOM(); _perPage=5; renderPagination({page:1,total_pages:3,total:15,per_page:5}); assertEqual(document.getElementById("pagination-bar").style.display,"flex"); });
+test("hides bar on single page",     () => { makePagDOM(); _perPage=25; renderPagination({page:1,total_pages:1,total:5,per_page:25}); assertEqual(document.getElementById("pagination-bar").style.display,"none"); });
+test("disables prev on page 1",      () => { makePagDOM(); _perPage=5; renderPagination({page:1,total_pages:3,total:15,per_page:5}); assertEqual(document.getElementById("prev-btn").disabled,true); });
+test("disables next on last page",   () => { makePagDOM(); _perPage=5; renderPagination({page:3,total_pages:3,total:15,per_page:5}); assertEqual(document.getElementById("next-btn").disabled,true); });
+test("enables prev on page 2+",      () => { makePagDOM(); _perPage=5; renderPagination({page:2,total_pages:3,total:15,per_page:5}); assertEqual(document.getElementById("prev-btn").disabled,false); });
+test("info shows correct range",     () => { makePagDOM(); _perPage=5; renderPagination({page:2,total_pages:3,total:15,per_page:5}); const t=document.getElementById("pagination-info").textContent; assertContains(t,"6"); assertContains(t,"10"); assertContains(t,"15"); });
+test("indicator shows page of total",() => { makePagDOM(); _perPage=5; renderPagination({page:2,total_pages:3,total:15,per_page:5}); const t=document.getElementById("page-indicator").textContent; assertContains(t,"2"); assertContains(t,"3"); });
 
-test("hides pagination bar when single page", () => {
-  makePagDOM();
-  _perPage = 25;
-  renderPagination({ page: 1, total_pages: 1, total: 5, per_page: 25 });
-  assertEqual(document.getElementById("pagination-bar").style.display, "none");
-});
-
-test("disables prev button on first page", () => {
-  makePagDOM();
-  _perPage = 5;
-  renderPagination({ page: 1, total_pages: 3, total: 15, per_page: 5 });
-  assertEqual(document.getElementById("prev-btn").disabled, true);
-});
-
-test("disables next button on last page", () => {
-  makePagDOM();
-  _perPage = 5;
-  renderPagination({ page: 3, total_pages: 3, total: 15, per_page: 5 });
-  assertEqual(document.getElementById("next-btn").disabled, true);
-});
-
-test("enables prev button on page 2+", () => {
-  makePagDOM();
-  _perPage = 5;
-  renderPagination({ page: 2, total_pages: 3, total: 15, per_page: 5 });
-  assertEqual(document.getElementById("prev-btn").disabled, false);
-});
-
-test("pagination info shows correct range", () => {
-  makePagDOM();
-  _perPage = 5;
-  renderPagination({ page: 2, total_pages: 3, total: 15, per_page: 5 });
-  const info = document.getElementById("pagination-info").textContent;
-  assertContains(info, "6");
-  assertContains(info, "10");
-  assertContains(info, "15");
-});
-
-test("page indicator shows page of total", () => {
-  makePagDOM();
-  _perPage = 5;
-  renderPagination({ page: 2, total_pages: 3, total: 15, per_page: 5 });
-  const indicator = document.getElementById("page-indicator").textContent;
-  assertContains(indicator, "2");
-  assertContains(indicator, "3");
-});
-
-
-// ── saveFilterState ───────────────────────────────────────────────────────────
 
 section("saveFilterState");
 
-test("saves state to sessionStorage", () => {
+test("saves all fields to sessionStorage", () => {
   document.getElementById("filter-search").value   = "python";
   document.getElementById("filter-status").value   = "applied";
   document.getElementById("filter-score").value    = "4";
   document.getElementById("filter-provider").value = "anthropic";
-  _currentPage = 2;
-  _perPage     = 10;
-
+  _currentPage = 2; _perPage = 10;
   saveFilterState();
-
-  const saved = JSON.parse(sessionStorage.getItem("jobFilterState"));
-  assertEqual(saved.search,   "python");
-  assertEqual(saved.status,   "applied");
-  assertEqual(saved.score,    "4");
-  assertEqual(saved.provider, "anthropic");
-  assertEqual(saved.page,     2);
-  assertEqual(saved.per_page, 10);
-
-  // cleanup
-  document.getElementById("filter-search").value   = "";
-  document.getElementById("filter-status").value   = "";
-  document.getElementById("filter-score").value    = "";
-  document.getElementById("filter-provider").value = "";
+  const s = JSON.parse(sessionStorage.getItem("jobFilterState"));
+  assertEqual(s.search,"python"); assertEqual(s.status,"applied"); assertEqual(s.score,"4"); assertEqual(s.provider,"anthropic"); assertEqual(s.page,2); assertEqual(s.per_page,10);
+  ["filter-search","filter-status","filter-score","filter-provider"].forEach(id => { document.getElementById(id).value = ""; });
   sessionStorage.removeItem("jobFilterState");
 });
 
 
-// ── clearFilters ──────────────────────────────────────────────────────────────
+section("showLoading");
+
+test("shows loading element",        () => { document.getElementById("jobs-loading").style.display="none";  showLoading(true);  assertEqual(document.getElementById("jobs-loading").style.display,"block"); });
+test("hides loading element",        () => { document.getElementById("jobs-loading").style.display="block"; showLoading(false); assertEqual(document.getElementById("jobs-loading").style.display,"none"); });
+test("hides error box on load start",() => { const e=document.getElementById("jobs-error"); e.classList.remove("hidden"); showLoading(true); assertClass(e,"hidden"); });
+test("clears jobs list on load start",() => { const l=document.getElementById("jobs-list"); l.innerHTML="<div>old</div>"; showLoading(true); assertEqual(l.innerHTML,""); });
+
 
 section("clearFilters");
 
@@ -487,65 +662,14 @@ test("clears all filter inputs", () => {
   document.getElementById("filter-status").value   = "applied";
   document.getElementById("filter-score").value    = "3";
   document.getElementById("filter-provider").value = "ollama";
-
-  // stub fetchJobs to avoid real fetch
-  const origFetch = window.fetch;
-  window.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ total: 0, jobs: [], total_pages: 1, page: 1, per_page: 25 }) });
-
+  const orig = window.fetch;
+  window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})});
   clearFilters();
-
-  window.fetch = origFetch;
-
+  window.fetch = orig;
   assertEqual(document.getElementById("filter-search").value,   "");
   assertEqual(document.getElementById("filter-status").value,   "");
   assertEqual(document.getElementById("filter-score").value,    "");
   assertEqual(document.getElementById("filter-provider").value, "");
-});
-
-
-// ── showLoading ───────────────────────────────────────────────────────────────
-
-section("showLoading");
-
-test("shows loading indicator", () => {
-  const loading = document.getElementById("jobs-loading");
-  loading.style.display = "none";
-  showLoading(true);
-  assertEqual(loading.style.display, "block");
-});
-
-test("hides loading indicator", () => {
-  const loading = document.getElementById("jobs-loading");
-  loading.style.display = "block";
-  showLoading(false);
-  assertEqual(loading.style.display, "none");
-});
-
-test("hides error box when loading starts", () => {
-  const errBox = document.getElementById("jobs-error");
-  errBox.classList.remove("hidden");
-  showLoading(true);
-  assertClass(errBox, "hidden");
-});
-
-test("clears jobs list when loading starts", () => {
-  const list = document.getElementById("jobs-list");
-  list.innerHTML = "<div>old content</div>";
-  showLoading(true);
-  assertEqual(list.innerHTML, "");
-});
-
-
-// ── log / logErr ──────────────────────────────────────────────────────────────
-
-section("log / logErr");
-
-test("log does not throw", () => {
-  log("test", "some message", { extra: 1 });
-});
-
-test("logErr does not throw", () => {
-  logErr("test", "some error", new Error("oops"));
 });
 
 
@@ -555,7 +679,6 @@ const total = _passed + _failed;
 const summaryMsg = `${total} tests — ${_passed} passed, ${_failed} failed`;
 console.log(`\n${summaryMsg}`);
 
-// Render results to page
 document.body.insertAdjacentHTML("afterbegin", `
   <h1>app.js — Unit Tests</h1>
   <div id="results"></div>

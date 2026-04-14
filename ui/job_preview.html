@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Preview Job — Job Matcher</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark">// job-matcher</div>
+        <h1>Resume Match</h1>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="/" class="nav-link" id="nav-jobs"><span class="icon">⬡</span> Jobs</a>
+        <a href="/resumes" class="nav-link" id="nav-resumes"><span class="icon">◈</span> Resumes</a>
+      </nav>
+      <div class="sidebar-footer">SQLite · Local · v5.0</div>
+    </aside>
+    <main class="main">
+      <div class="page-header">
+        <h2 class="page-title">Preview Job</h2>
+        <p class="text-dim" style="margin-top:4px;">Review and clean up the scraped content before saving.</p>
+      </div>
+      <div id="warnings-panel" class="card mb-16" style="display:none;">
+        <div class="section-header">
+          <span class="section-title">⚠ Warnings</span>
+          <span class="text-dim text-sm">Review before saving — you can still edit the description below.</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:8px; padding:4px 0;">
+          <div id="blocker-block" class="text-quality-warning level-poor" style="display:none; margin:0;">
+            <strong>🚫 Potential blockers detected</strong>
+            <ul id="blocker-list" style="margin:6px 0 0 0; padding-left:18px;"></ul>
+            <small class="text-dim">This job may require clearance or citizenship not on your resume.</small>
+          </div>
+          <div id="tq-block" class="text-quality-warning level-warn" style="display:none; margin:0;">
+            <strong>⚠ Text quality issues</strong>
+            <ul id="tq-list" style="margin:6px 0 0 0; padding-left:18px;"></ul>
+            <small id="tq-meta" class="text-dim"></small>
+          </div>
+        </div>
+      </div>
+      <div class="card mb-16">
+        <div class="section-header">
+          <span class="section-title">Job Details</span>
+          <span class="text-dim text-sm">Edit before saving — especially the description if the scraper added noise.</span>
+        </div>
+        <form id="preview-form" style="display:flex; flex-direction:column; gap:14px;">
+          <input type="hidden" name="url" value="" />
+          <div class="form-grid">
+            <div class="form-row" style="margin:0;">
+              <label>Job Title</label>
+              <input type="text" name="title" value="" placeholder="e.g. Senior Python Developer" />
+            </div>
+            <div class="form-row" style="margin:0;">
+              <label>Company</label>
+              <input type="text" name="company" value="" placeholder="e.g. Acme Corp" />
+            </div>
+          </div>
+          <div class="form-row" style="margin:0;">
+            <label>Location</label>
+            <input type="text" name="location" value="" placeholder="e.g. Remote, Washington DC" />
+          </div>
+          <div class="form-row" style="margin:0;">
+            <label>
+              Job Description
+              <span class="text-dim text-sm" style="font-weight:normal; margin-left:8px;">
+                <span id="preview-char-count">—</span> chars — clean up spaces, remove noise
+              </span>
+            </label>
+            <textarea name="description" id="preview-description" rows="20"
+                      style="font-family: monospace; font-size: 13px; line-height: 1.5; resize: vertical;"></textarea>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <button type="button" class="btn btn-primary" onclick="savePreview()">Save Job</button>
+            <a href="/" class="btn btn-ghost">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </main>
+  </div>
+  <div id="toast"></div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

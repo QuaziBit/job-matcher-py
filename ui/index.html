@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jobs — Job Matcher</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark">// job-matcher</div>
+        <h1>Resume Match</h1>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="/" class="nav-link" id="nav-jobs"><span class="icon">⬡</span> Jobs</a>
+        <a href="/resumes" class="nav-link" id="nav-resumes"><span class="icon">◈</span> Resumes</a>
+      </nav>
+      <div class="sidebar-footer">SQLite · Local · v5.0</div>
+    </aside>
+    <main class="main">
+      <div class="page-header">
+        <h2>Job Tracker</h2>
+        <p>Add a job by URL or paste the description directly.</p>
+      </div>
+      <div style="margin-bottom: 12px;">
+        <div class="llm-toggle" style="display:inline-flex;">
+          <input type="radio" name="add-mode" id="mode-url" value="url" checked />
+          <label for="mode-url">URL</label>
+          <input type="radio" name="add-mode" id="mode-paste" value="paste" />
+          <label for="mode-paste">Paste</label>
+        </div>
+      </div>
+      <form id="add-job-form" class="add-job-bar">
+        <input type="text" name="url" placeholder="https://jobs.example.com/posting/12345"
+               autocomplete="off" style="font-family: var(--font-mono); font-size: 12px;" />
+        <button type="submit" class="btn btn-primary">Add Job</button>
+      </form>
+      <div id="paste-job-form-wrap" class="card hidden" style="margin-bottom: 20px;">
+        <div class="form-grid" style="margin-bottom: 14px;">
+          <div class="form-row" style="margin:0;">
+            <label>Job Title</label>
+            <input type="text" id="paste-title" placeholder="e.g. DevSecOps Engineer" />
+          </div>
+          <div class="form-row" style="margin:0;">
+            <label>Company</label>
+            <input type="text" id="paste-company" placeholder="e.g. Acme Federal" />
+          </div>
+        </div>
+        <div class="form-row" style="margin-bottom: 14px;">
+          <label>Location <span class="text-dim" style="font-weight:normal;">(optional)</span></label>
+          <input type="text" id="paste-location" placeholder="e.g. Remote, Washington DC" />
+        </div>
+        <div class="form-row">
+          <label>Job Description</label>
+          <textarea id="paste-description" placeholder="Paste the full job description here…"
+                    style="min-height: 160px; font-size: 12px;"></textarea>
+        </div>
+        <button class="btn btn-primary" id="paste-submit-btn" onclick="addJobManual()">Add Job</button>
+      </div>
+      <div class="filter-bar">
+        <div class="search-wrap">
+          <input type="text" id="filter-search" placeholder="Search title, company, or recruiter…" autocomplete="off" />
+          <button id="search-clear-btn" class="search-clear-btn" onclick="clearSearch()" style="display:none;" title="Clear search">✕</button>
+        </div>
+        <select id="filter-status">
+          <option value="">All Statuses</option>
+          <option value="not_applied">Not Applied</option>
+          <option value="applied">Applied</option>
+          <option value="interviewing">Interviewing</option>
+          <option value="offered">Offered</option>
+          <option value="rejected">Rejected</option>
+        </select>
+        <select id="filter-score">
+          <option value="">Any Score</option>
+          <option value="5">5 only</option>
+          <option value="4">4 or higher</option>
+          <option value="3">3 or higher</option>
+          <option value="2">2 or higher</option>
+          <option value="1">1 or higher</option>
+          <option value="0">Not scored</option>
+        </select>
+        <select id="filter-provider">
+          <option value="">All Providers</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI</option>
+          <option value="gemini">Gemini</option>
+          <option value="ollama">Ollama</option>
+          <option value="manual">Manual</option>
+        </select>
+        <div id="date-filter-wrap" style="display:flex; align-items:center; gap:6px;">
+          <select id="filter-date">
+            <option value="">Any Time</option>
+            <option value="1">Today</option>
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+          <input type="date" id="filter-date-from" style="display:none;" title="From date" />
+          <span id="date-range-sep" style="display:none; color:var(--text-mute); font-size:11px;">→</span>
+          <input type="date" id="filter-date-to" style="display:none;" title="To date" />
+          <button class="btn btn-ghost btn-sm" id="date-mode-btn" onclick="toggleDateMode()" title="Switch date filter mode" style="padding:4px 7px; font-size:11px;">⋯</button>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="clearFilters()" id="clear-btn" style="display:none;">✕ Clear</button>
+      </div>
+      <div id="jobs-list"></div>
+      <div class="pagination-bar" id="pagination-bar" style="display:none;">
+        <span class="pagination-info" id="pagination-info"></span>
+        <div class="pagination-controls">
+          <button class="btn btn-ghost btn-sm" id="prev-btn" onclick="changePage(-1)" disabled>← Prev</button>
+          <span id="page-indicator" class="pagination-pages"></span>
+          <button class="btn btn-ghost btn-sm" id="next-btn" onclick="changePage(1)" disabled>Next →</button>
+        </div>
+        <select id="per-page" onchange="changePerPage()" class="pagination-perpage">
+          <option value="5">5 per page</option>
+          <option value="10">10 per page</option>
+          <option value="25" selected>25 per page</option>
+          <option value="50">50 per page</option>
+          <option value="0">All</option>
+        </select>
+      </div>
+      <div id="jobs-loading" class="empty" style="display:none;"><div class="empty-icon">⬡</div><p>Loading…</p></div>
+      <div id="jobs-error" class="jobs-error hidden">
+        <div class="jobs-error-icon">✗</div>
+        <div>
+          <div class="jobs-error-title">Failed to load jobs</div>
+          <div class="jobs-error-text" id="jobs-error-text"></div>
+          <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="fetchJobs()">↺ Retry</button>
+        </div>
+      </div>
+      <div id="no-results" class="empty hidden">
+        <div class="empty-icon">⬡</div>
+        <p>No jobs match your filters.<br><a href="#" onclick="clearFilters(); return false;" style="color:var(--amber);">Clear filters</a></p>
+      </div>
+      <div id="empty-state" class="empty hidden">
+        <div class="empty-icon">⬡</div>
+        <p>No jobs tracked yet.<br>Add a job URL or paste a description above.</p>
+      </div>
+    </main>
+  </div>
+  <div id="toast"></div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
