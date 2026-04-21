@@ -355,6 +355,7 @@ async def add_job_manual(
     title: str = Form(""),
     company: str = Form(""),
     location: str = Form(""),
+    source_url: str = Form(""),
     description: str = Form(...),
     db: aiosqlite.Connection = Depends(get_db),
 ):
@@ -370,11 +371,24 @@ async def add_job_manual(
 
     title         = title.strip()   or "Untitled Job"
     company       = company.strip() or ""
+    source_url    = source_url.strip()
+
+    # Use provided URL if given, otherwise generate a synthetic manual:// URL
+    if source_url:
+        job_url = source_url
+    else:
+        slug    = hashlib.md5(description[:200].encode()).hexdigest()[:12]
+        job_url = f"manual://{slug}"
+
+    # Duplicate check against both the resolved URL and a synthetic fallback
     slug          = hashlib.md5(description[:200].encode()).hexdigest()[:12]
     synthetic_url = f"manual://{slug}"
 
     try:
-        async with db.execute("SELECT id FROM jobs WHERE url = ?", (synthetic_url,)) as cur:
+        async with db.execute(
+            "SELECT id FROM jobs WHERE url = ? OR (url = ? AND ? = '')",
+            (job_url, synthetic_url, source_url),
+        ) as cur:
             existing = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ add_job_manual DB error checking duplicate: {e}")
@@ -382,7 +396,7 @@ async def add_job_manual(
 
     if existing:
         return JSONResponse(
-            {"error": "This description has already been added.", "job_id": existing[0]},
+            {"error": "This job has already been added.", "job_id": existing[0]},
             status_code=409,
         )
 
@@ -392,7 +406,7 @@ async def add_job_manual(
     try:
         async with db.execute(
             "INSERT INTO jobs (url, title, company, location, raw_description) VALUES (?, ?, ?, ?, ?)",
-            (synthetic_url, title, company, location.strip(), description),
+            (job_url, title, company, location.strip(), description),
         ) as cur:
             job_id = cur.lastrowid
         await db.commit()
@@ -649,6 +663,47 @@ async def delete_job(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
         logger.error(f"✗ delete_job DB error for job {job_id}: {e}")
         return JSONResponse({"error": "Failed to delete job."}, status_code=500)
     return JSONResponse({"ok": True})
+
+
+@app.patch("/api/jobs/{job_id}/url")
+async def update_job_url(
+    job_id: int,
+    url: str = Form(""),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Update or clear the source URL of a saved job."""
+    import hashlib
+
+    url = url.strip()
+
+    # Validate URL if provided
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        return JSONResponse(
+            {"error": "URL must start with http:// or https://"},
+            status_code=422,
+        )
+
+    # Check job exists
+    async with db.execute("SELECT id, raw_description FROM jobs WHERE id = ?", (job_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return JSONResponse({"error": "Job not found."}, status_code=404)
+
+    # If clearing URL, regenerate synthetic manual:// URL
+    if not url:
+        desc = row[1] or ""
+        slug = hashlib.md5(desc[:200].encode()).hexdigest()[:12]
+        url  = f"manual://{slug}"
+
+    try:
+        await db.execute("UPDATE jobs SET url = ? WHERE id = ?", (url, job_id))
+        await db.commit()
+    except Exception as e:
+        logger.error(f"✗ update_job_url DB error for job {job_id}: {e}")
+        return JSONResponse({"error": "Failed to update URL."}, status_code=500)
+
+    logger.info(f"✓ Job {job_id} URL updated to: {url}")
+    return JSONResponse({"ok": True, "url": url})
 
 
 @app.post("/api/resumes/add")

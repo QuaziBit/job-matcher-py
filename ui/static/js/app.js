@@ -181,6 +181,7 @@ async function addJobManual() {
   const title       = document.getElementById('paste-title').value.trim();
   const company     = document.getElementById('paste-company').value.trim();
   const location    = (document.getElementById('paste-location') || {value:''}).value.trim();
+  const sourceUrl   = (document.getElementById('paste-url')      || {value:''}).value.trim();
   const description = document.getElementById('paste-description').value.trim();
   const btn         = document.getElementById('paste-submit-btn');
 
@@ -195,6 +196,7 @@ async function addJobManual() {
   fd.append('title',       title);
   fd.append('company',     company);
   fd.append('location',    location);
+  fd.append('source_url',  sourceUrl);
   fd.append('description', description);
 
   try {
@@ -474,6 +476,38 @@ async function deleteJob(jobId) {
     }
   } catch(err) {
     logErr('deleteJob', 'fetch threw:', err);
+    toast('Network error', 'error');
+  }
+}
+
+
+// ── Edit / save job URL ───────────────────────────────────────────────────────
+
+function showEditUrlModal(jobId) {
+  const current = document.querySelector('#job-url-display a');
+  const currentVal = current ? current.href : '';
+  const newUrl = prompt('Enter source URL for this job (leave blank to clear):', currentVal);
+  if (newUrl === null) return; // cancelled
+  saveJobUrl(jobId, newUrl.trim());
+}
+
+async function saveJobUrl(jobId, url) {
+  log('saveJobUrl', `jobId=${jobId} url="${url}"`);
+  const fd = new FormData();
+  fd.append('url', url);
+  try {
+    const res  = await fetch(`/api/jobs/${jobId}/url`, { method: 'PATCH', body: fd });
+    const data = await res.json();
+    log('saveJobUrl', `response status=${res.status}`, data);
+    if (!res.ok) {
+      logErr('saveJobUrl', `server error ${res.status}:`, data.error);
+      toast(data.error || 'Failed to update URL', 'error');
+      return;
+    }
+    toast('✓ URL updated', 'success');
+    refreshJobDetailPage();
+  } catch(err) {
+    logErr('saveJobUrl', 'fetch threw:', err);
     toast('Network error', 'error');
   }
 }
@@ -1163,11 +1197,14 @@ const TMPL = {
   },
 
   // Job URL link or "pasted description" label
-  jobUrl(url) {
+  jobUrl(url, jobId) {
+    const editBtn = jobId
+      ? `<button class="btn btn-ghost btn-xs" style="margin-left:6px;padding:1px 6px;font-size:11px;" onclick="showEditUrlModal(${jobId})" title="Edit source URL">&#9998;</button>`
+      : '';
     if (!url || url.startsWith('manual://')) {
-      return `<span style="color: var(--text-mute);">\u00b7 pasted description</span>`;
+      return `<span style="color: var(--text-mute);">\u00b7 pasted description${editBtn}</span>`;
     }
-    return `<span>\u00b7 <a href="${escHtml(url)}" target="_blank" style="color: var(--amber);">View Original \u2197</a></span>`;
+    return `<span>\u00b7 <a href="${escHtml(url)}" target="_blank" style="color: var(--amber);">View Original \u2197</a>${editBtn}</span>`;
   },
 
   // Score explainer <details> block (static content, no dynamic data)
@@ -1675,7 +1712,7 @@ const TMPL = {
     const comp = d.comparison;
 
     const salaryHtml    = TMPL.salaryBadge(sal, job.id);
-    const urlHtml       = TMPL.jobUrl(job.url);
+    const urlHtml       = TMPL.jobUrl(job.url, job.id);
     const tqWarning     = TMPL.tqWarning(tq, 'margin-top:14px;');
 
     const lastProvider   = d.last_provider || 'anthropic';

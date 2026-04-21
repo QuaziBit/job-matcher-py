@@ -327,6 +327,10 @@ test("real url — anchor tag",            () => assertContains(TMPL.jobUrl("htt
 test("real url — href matches",          () => assertContains(TMPL.jobUrl("https://example.com/job"), "https://example.com/job"));
 test("real url — opens in new tab",      () => assertContains(TMPL.jobUrl("https://example.com"), 'target="_blank"'));
 test("real url — View Original text",    () => assertContains(TMPL.jobUrl("https://example.com"), "View Original"));
+test("no jobId — no edit button",        () => assertNotContains(TMPL.jobUrl("https://example.com"), "showEditUrlModal"));
+test("with jobId — edit button present", () => assertContains(TMPL.jobUrl("https://example.com", 42), "showEditUrlModal(42)"));
+test("manual + jobId — edit button",     () => assertContains(TMPL.jobUrl(null, 7), "showEditUrlModal(7)"));
+test("with jobId — has edit icon",       () => assertContains(TMPL.jobUrl("https://example.com", 1), "&#9998;"));
 
 
 section("TMPL.jobMeta");

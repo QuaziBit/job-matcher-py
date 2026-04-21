@@ -1568,3 +1568,89 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         for key in ["anthropic_model", "openai_model", "gemini_model", "ollama_model"]:
             self.assertIsInstance(data[key], str, f"{key} should be a string")
             self.assertTrue(len(data[key]) > 0, f"{key} should not be empty")
+
+    # ── PATCH /api/jobs/{id}/url ───────────────────────────────────────────
+
+    async def test_update_job_url_sets_url(self):
+        """PATCH /api/jobs/{id}/url should update the job URL."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        patch_resp = await self.client.patch(f"/api/jobs/{jid}/url", data={
+            "url": "https://example.com/job/123"
+        })
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertTrue(patch_resp.json()["ok"])
+        self.assertEqual(patch_resp.json()["url"], "https://example.com/job/123")
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT url FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertEqual(row["url"], "https://example.com/job/123")
+
+    async def test_update_job_url_clear_restores_synthetic(self):
+        """Clearing URL should restore a manual:// synthetic URL."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        patch_resp = await self.client.patch(f"/api/jobs/{jid}/url", data={"url": ""})
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertTrue(patch_resp.json()["url"].startswith("manual://"))
+
+    async def test_update_job_url_invalid_scheme_returns_422(self):
+        """Non-http(s) URL should return 422."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        patch_resp = await self.client.patch(f"/api/jobs/{jid}/url", data={
+            "url": "ftp://bad.example.com"
+        })
+        self.assertEqual(patch_resp.status_code, 422)
+
+    async def test_update_job_url_not_found_returns_404(self):
+        """Patching a non-existent job should return 404."""
+        patch_resp = await self.client.patch("/api/jobs/99999/url", data={
+            "url": "https://example.com"
+        })
+        self.assertEqual(patch_resp.status_code, 404)
+
+    async def test_add_manual_job_with_source_url(self):
+        """Providing source_url should store it instead of manual:// URL."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title":      "Dev",
+            "company":    "Co",
+            "source_url": "https://linkedin.com/jobs/view/12345",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 200)
+        jid = resp.json()["job_id"]
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT url FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertEqual(row["url"], "https://linkedin.com/jobs/view/12345")
+
+    async def test_add_manual_job_without_source_url_is_manual(self):
+        """Omitting source_url should still generate a manual:// URL."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 200)
+        jid = resp.json()["job_id"]
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT url FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertTrue(row["url"].startswith("manual://"))
