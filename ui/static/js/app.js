@@ -483,12 +483,15 @@ async function deleteJob(jobId) {
 
 // ── Edit / save job URL ───────────────────────────────────────────────────────
 
-function showEditUrlModal(jobId) {
-  const current = document.querySelector('#job-url-display a');
-  const currentVal = current ? current.href : '';
-  const newUrl = prompt('Enter source URL for this job (leave blank to clear):', currentVal);
-  if (newUrl === null) return; // cancelled
-  saveJobUrl(jobId, newUrl.trim());
+function toggleUrlEdit() {
+  const row = document.getElementById('url-edit-row');
+  if (!row) return;
+  const visible = row.style.display === 'block';
+  row.style.display = visible ? 'none' : 'block';
+  if (!visible) {
+    const input = document.getElementById('url-edit-input');
+    if (input) { input.focus(); input.select(); }
+  }
 }
 
 async function saveJobUrl(jobId, url) {
@@ -1199,7 +1202,7 @@ const TMPL = {
   // Job URL link or "pasted description" label
   jobUrl(url, jobId) {
     const editBtn = jobId
-      ? `<button class="btn btn-ghost btn-xs" style="margin-left:6px;padding:1px 6px;font-size:11px;" onclick="showEditUrlModal(${jobId})" title="Edit source URL">&#9998;</button>`
+      ? `<button class="btn btn-ghost btn-xs" style="margin-left:6px;padding:1px 6px;font-size:11px;" onclick="toggleUrlEdit()" title="Edit source URL">&#9998;</button>`
       : '';
     if (!url || url.startsWith('manual://')) {
       return `<span style="color: var(--text-mute);">\u00b7 pasted description${editBtn}</span>`;
@@ -1262,6 +1265,7 @@ const TMPL = {
 
   // Page header: title, status badge, company/location, URL, salary
   pageHeader(job, statusClass, statusLabel, urlHtml, salaryHtml) {
+    const currentUrl = (!job.url || job.url.startsWith('manual://')) ? '' : job.url;
     return `
       <div style="margin-bottom: 20px;">
         <a href="/" class="btn btn-ghost btn-sm">\u2190 Back</a>
@@ -1275,6 +1279,15 @@ const TMPL = {
         <div class="flex gap-10 text-dim text-mono text-xs">
           ${TMPL.jobMeta(job.company, job.location)}
           ${urlHtml}
+        </div>
+        <div id="url-edit-row" style="display:none; margin-top:8px; display:none;">
+          <div class="flex gap-10 items-center" style="max-width:600px;">
+            <input id="url-edit-input" type="text" value="${escHtml(currentUrl)}"
+                   placeholder="https://jobs.example.com/posting/12345"
+                   style="flex:1; font-size:12px;" />
+            <button class="btn btn-primary btn-sm" onclick="saveJobUrl(${job.id}, document.getElementById('url-edit-input').value)">Save</button>
+            <button class="btn btn-ghost btn-sm" onclick="toggleUrlEdit()">Cancel</button>
+          </div>
         </div>
         ${salaryHtml}
       </div>`;
