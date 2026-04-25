@@ -107,7 +107,7 @@ def run_health_checks(db_path: str, ollama_url: str, api_key: str,
 
 # ── Launcher page HTML ────────────────────────────────────────────────────────
 
-_LAUNCHER_UI_DIR = os.path.join(os.path.dirname(__file__), "launcher_ui")
+_LAUNCHER_UI_DIR = os.path.join(os.path.dirname(__file__), "ui", "launcher")
 
 _MIME_TYPES = {
     ".html": "text/html; charset=utf-8",

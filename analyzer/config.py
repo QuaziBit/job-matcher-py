@@ -84,6 +84,8 @@ MODEL_MAX_MODE = {
     "gemma3:4b":     "standard",
     "gemma3:12b":    "standard",
     "gemma3:27b":    "detailed",
+    # Gemma 3n
+    "gemma3n:e4b":   "detailed",
     # Mistral — standard is safe
     "mistral:7b":    "standard",
     "mistral:latest": "standard",
@@ -103,6 +105,10 @@ MODEL_MAX_MODE = {
     "qwen2.5:14b":  "detailed",
     "qwen2.5:32b":  "detailed",
     "qwen2.5:72b":  "detailed",
+    # Qwen 2.5 Coder
+    "qwen2.5-coder:7b":  "detailed",
+    "qwen2.5-coder:14b": "detailed",
+    "qwen2.5-coder:32b": "detailed",
 }
 
 # Mode ordering for comparisons

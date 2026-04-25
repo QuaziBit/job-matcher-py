@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Job Detail — Job Matcher</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark">// job-matcher</div>
+        <h1>Resume Match</h1>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="/" class="nav-link" id="nav-jobs"><span class="icon">⬡</span> Jobs</a>
+        <a href="/resumes" class="nav-link" id="nav-resumes"><span class="icon">◈</span> Resumes</a>
+      </nav>
+      <div class="sidebar-footer">SQLite · Local · v5.0</div>
+    </aside>
+    <main class="main" id="job-detail-main">
+      <div id="job-detail-loading" class="empty">
+        <div class="empty-icon">⬡</div>
+        <p>Loading…</p>
+      </div>
+    </main>
+  </div>
+  <div id="toast"></div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

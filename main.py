@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from dotenv import load_dotenv
 
 import aiosqlite
@@ -33,169 +32,24 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Job Matcher", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
-templates.env.filters["format_duration"] = format_duration
+app.mount("/static", StaticFiles(directory="ui/static"), name="static")
+_UI_DIR = os.path.join(os.path.dirname(__file__), "ui")
+
 
 
 # ── Pages ──────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request, db: aiosqlite.Connection = Depends(get_db)):
-    try:
-        async with db.execute("SELECT id, label FROM resumes ORDER BY created_at DESC") as cur:
-            resumes = [dict(r) for r in await cur.fetchall()]
-    except Exception as e:
-        logger.error(f"✗ index page DB error: {e}")
-        resumes = []
-    return templates.TemplateResponse("index.html", {"request": request, "resumes": resumes})
-
-
+async def index():
+    return HTMLResponse(open(os.path.join(_UI_DIR, "index.html"), encoding="utf-8").read())
 @app.get("/job/{job_id}", response_class=HTMLResponse)
-async def job_detail(job_id: int, request: Request, db: aiosqlite.Connection = Depends(get_db)):
-    try:
-        async with db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)) as cur:
-            job = await cur.fetchone()
-    except Exception as e:
-        logger.error(f"✗ job_detail DB error fetching job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail="Database error")
-
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    job = dict(job)
-
-    try:
-        async with db.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,)) as cur:
-            app_row = await cur.fetchone()
-        application = dict(app_row) if app_row else {}
-
-        async with db.execute("""
-            SELECT a.*, r.label as resume_label
-            FROM analyses a JOIN resumes r ON r.id = a.resume_id
-            WHERE a.job_id = ?
-            ORDER BY a.created_at DESC
-        """, (job_id,)) as cur:
-            analyses = [dict(r) for r in await cur.fetchall()]
-
-        async with db.execute("SELECT id, label FROM resumes ORDER BY created_at DESC") as cur:
-            resumes = [dict(r) for r in await cur.fetchall()]
-    except Exception as e:
-        logger.error(f"✗ job_detail DB error fetching related data for job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail="Database error")
-
-    # Parse JSON fields — v2 columns preferred, v1 as fallback
-    for analysis in analyses:
-        try:
-            v2_matched = analysis.get("matched_skills_v2", "[]") or "[]"
-            parsed_v2  = json.loads(v2_matched)
-            if parsed_v2:
-                analysis["matched_skills"] = parsed_v2
-            else:
-                v1 = json.loads(analysis.get("matched_skills", "[]") or "[]")
-                analysis["matched_skills"] = [
-                    {"skill": s, "match_type": "exact",
-                     "jd_snippet": "", "resume_snippet": "", "category": "other"}
-                    for s in v1 if isinstance(s, str)
-                ]
-        except Exception:
-            analysis["matched_skills"] = []
-
-        try:
-            v2_missing = analysis.get("missing_skills_v2", "[]") or "[]"
-            parsed_v2  = json.loads(v2_missing)
-            if parsed_v2:
-                analysis["missing_skills"] = parsed_v2
-            else:
-                v1 = json.loads(analysis.get("missing_skills", "[]") or "[]")
-                analysis["missing_skills"] = [
-                    {"skill": s["skill"] if isinstance(s, dict) else s,
-                     "severity": s.get("severity", "minor") if isinstance(s, dict) else "minor",
-                     "requirement_type": s.get("requirement_type", "preferred") if isinstance(s, dict) else "preferred",
-                     "jd_snippet": "", "cluster_group": "other"}
-                    for s in v1
-                ]
-        except Exception:
-            analysis["missing_skills"] = []
-
-        try:
-            pb = analysis.get("penalty_breakdown")
-            if isinstance(pb, str):
-                analysis["penalty_breakdown"] = json.loads(pb)
-        except Exception:
-            analysis["penalty_breakdown"] = {}
-
-        try:
-            sugg = analysis.get("suggestions", "[]") or "[]"
-            analysis["suggestions"] = json.loads(sugg) if isinstance(sugg, str) else sugg
-        except Exception:
-            analysis["suggestions"] = []
-
-        if not analysis.get("adjusted_score"):
-            analysis["adjusted_score"] = analysis["score"]
-
-        analysis["used_fallback"] = bool(analysis.get("used_fallback", 0))
-
-    text_quality   = assess_job_text_quality(job.get("raw_description") or "")
-    comparison     = build_comparison(analyses)
-    last_resume_id = analyses[0]["resume_id"] if analyses else None
-
-    salary_data = json.loads(job["salary_estimate"]) if job.get("salary_estimate") else None
-    if analyses:
-        last_provider = analyses[0]["llm_provider"]
-        last_model    = analyses[0].get("llm_model", "")
-    elif salary_data and salary_data.get("llm_provider"):
-        last_provider = salary_data["llm_provider"]
-        last_model    = salary_data.get("llm_model", "")
-    else:
-        last_provider = "anthropic"
-        last_model    = ""
-
-    # Check provider availability
-    has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY", ""))
-    has_openai    = bool(os.getenv("OPENAI_API_KEY", ""))
-    has_gemini    = bool(os.getenv("GEMINI_API_KEY", ""))
-    has_ollama    = False
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=2) as _client:
-            _r = await _client.get(f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}/api/tags")
-            has_ollama = _r.status_code == 200
-    except Exception:
-        pass
-
-    return templates.TemplateResponse("job_detail.html", {
-        "request":          request,
-        "job":              job,
-        "application":      application,
-        "analyses":         analyses,
-        "resumes":          resumes,
-        "ollama_model":     last_model if last_provider == "ollama"    else _ollama_model(),
-        "anthropic_model":  last_model if last_provider == "anthropic" else anthropic_model(),
-        "openai_model":     last_model if last_provider == "openai"    else openai_model(),
-        "gemini_model":     last_model if last_provider == "gemini"    else gemini_model(),
-        "text_quality":     text_quality,
-        "comparison":       comparison,
-        "analysis_mode":    analyses[0].get("analysis_mode") or os.getenv("ANALYSIS_MODE", "standard") if analyses else os.getenv("ANALYSIS_MODE", "standard"),
-        "salary_estimate":  json.loads(job["salary_estimate"]) if job.get("salary_estimate") else None,
-        "has_salary_in_jd": _job_has_salary(job.get("raw_description", "")),
-        "last_resume_id":   last_resume_id,
-        "last_provider":    last_provider,
-        "has_anthropic":    has_anthropic,
-        "has_openai":       has_openai,
-        "has_gemini":       has_gemini,
-        "has_ollama":       has_ollama,
-    })
+async def job_detail(job_id: int):
+    return HTMLResponse(open(os.path.join(_UI_DIR, "job_detail.html"), encoding="utf-8").read())
 
 
 @app.get("/resumes", response_class=HTMLResponse)
-async def resumes_page(request: Request, db: aiosqlite.Connection = Depends(get_db)):
-    try:
-        async with db.execute("SELECT * FROM resumes ORDER BY created_at DESC") as cur:
-            resumes = [dict(r) for r in await cur.fetchall()]
-    except Exception as e:
-        logger.error(f"✗ resumes page DB error: {e}")
-        resumes = []
-    return templates.TemplateResponse("resumes.html", {"request": request, "resumes": resumes})
+async def resumes_page():
+    return HTMLResponse(open(os.path.join(_UI_DIR, "resumes.html"), encoding="utf-8").read())
 
 
 # ── API Endpoints ──────────────────────────────────────────────────────────────
@@ -359,20 +213,8 @@ async def jobs_list(
 
 
 @app.get("/jobs/preview", response_class=HTMLResponse)
-async def job_preview_page(request: Request, url: str = ""):
-    """Render the job preview page (no DB access — just the template shell)."""
-    return templates.TemplateResponse("job_preview.html", {
-        "request":      request,
-        "active_page":  "jobs",
-        "url":          "",
-        "title":        "",
-        "company":      "",
-        "location":     "",
-        "description":  "",
-        "warnings":     False,
-        "blocker_keywords": [],
-        "text_quality": None,
-    })
+async def job_preview_page():
+    return HTMLResponse(open(os.path.join(_UI_DIR, "job_preview.html"), encoding="utf-8").read())
 
 
 @app.post("/api/jobs/scrape")
@@ -513,6 +355,7 @@ async def add_job_manual(
     title: str = Form(""),
     company: str = Form(""),
     location: str = Form(""),
+    source_url: str = Form(""),
     description: str = Form(...),
     db: aiosqlite.Connection = Depends(get_db),
 ):
@@ -528,11 +371,24 @@ async def add_job_manual(
 
     title         = title.strip()   or "Untitled Job"
     company       = company.strip() or ""
+    source_url    = source_url.strip()
+
+    # Use provided URL if given, otherwise generate a synthetic manual:// URL
+    if source_url:
+        job_url = source_url
+    else:
+        slug    = hashlib.md5(description[:200].encode()).hexdigest()[:12]
+        job_url = f"manual://{slug}"
+
+    # Duplicate check against both the resolved URL and a synthetic fallback
     slug          = hashlib.md5(description[:200].encode()).hexdigest()[:12]
     synthetic_url = f"manual://{slug}"
 
     try:
-        async with db.execute("SELECT id FROM jobs WHERE url = ?", (synthetic_url,)) as cur:
+        async with db.execute(
+            "SELECT id FROM jobs WHERE url = ? OR (url = ? AND ? = '')",
+            (job_url, synthetic_url, source_url),
+        ) as cur:
             existing = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ add_job_manual DB error checking duplicate: {e}")
@@ -540,7 +396,7 @@ async def add_job_manual(
 
     if existing:
         return JSONResponse(
-            {"error": "This description has already been added.", "job_id": existing[0]},
+            {"error": "This job has already been added.", "job_id": existing[0]},
             status_code=409,
         )
 
@@ -550,7 +406,7 @@ async def add_job_manual(
     try:
         async with db.execute(
             "INSERT INTO jobs (url, title, company, location, raw_description) VALUES (?, ?, ?, ?, ?)",
-            (synthetic_url, title, company, location.strip(), description),
+            (job_url, title, company, location.strip(), description),
         ) as cur:
             job_id = cur.lastrowid
         await db.commit()
@@ -809,6 +665,47 @@ async def delete_job(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
     return JSONResponse({"ok": True})
 
 
+@app.patch("/api/jobs/{job_id}/url")
+async def update_job_url(
+    job_id: int,
+    url: str = Form(""),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Update or clear the source URL of a saved job."""
+    import hashlib
+
+    url = url.strip()
+
+    # Validate URL if provided
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        return JSONResponse(
+            {"error": "URL must start with http:// or https://"},
+            status_code=422,
+        )
+
+    # Check job exists
+    async with db.execute("SELECT id, raw_description FROM jobs WHERE id = ?", (job_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return JSONResponse({"error": "Job not found."}, status_code=404)
+
+    # If clearing URL, regenerate synthetic manual:// URL
+    if not url:
+        desc = row[1] or ""
+        slug = hashlib.md5(desc[:200].encode()).hexdigest()[:12]
+        url  = f"manual://{slug}"
+
+    try:
+        await db.execute("UPDATE jobs SET url = ? WHERE id = ?", (url, job_id))
+        await db.commit()
+    except Exception as e:
+        logger.error(f"✗ update_job_url DB error for job {job_id}: {e}")
+        return JSONResponse({"error": "Failed to update URL."}, status_code=500)
+
+    logger.info(f"✓ Job {job_id} URL updated to: {url}")
+    return JSONResponse({"ok": True, "url": url})
+
+
 @app.post("/api/resumes/add")
 async def add_resume(
     label: str = Form(...),
@@ -849,6 +746,171 @@ async def get_description(job_id: int, db: aiosqlite.Connection = Depends(get_db
     if not row:
         raise HTTPException(status_code=404)
     return JSONResponse({"description": row["raw_description"]})
+
+
+# ── Job detail API ───────────────────────────────────────────────────
+
+@app.get("/api/jobs/{job_id}/detail")
+async def get_job_detail(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
+    """Return all data needed to render the job detail page as JSON."""
+    try:
+        async with db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)) as cur:
+            job = await cur.fetchone()
+    except Exception as e:
+        logger.error(f"✗ get_job_detail DB error fetching job {job_id}: {e}")
+        return JSONResponse({"error": "Database error"}, status_code=500)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = dict(job)
+
+    try:
+        async with db.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,)) as cur:
+            app_row = await cur.fetchone()
+        application = dict(app_row) if app_row else {}
+
+        async with db.execute("""
+            SELECT a.*, r.label as resume_label
+            FROM analyses a JOIN resumes r ON r.id = a.resume_id
+            WHERE a.job_id = ?
+            ORDER BY a.created_at DESC
+        """, (job_id,)) as cur:
+            analyses = [dict(r) for r in await cur.fetchall()]
+
+        async with db.execute("SELECT id, label FROM resumes ORDER BY created_at DESC") as cur:
+            resumes = [dict(r) for r in await cur.fetchall()]
+    except Exception as e:
+        logger.error(f"✗ get_job_detail DB error fetching related data for job {job_id}: {e}")
+        return JSONResponse({"error": "Database error"}, status_code=500)
+
+    # Parse JSON fields in analyses
+    for analysis in analyses:
+        try:
+            v2_matched = analysis.get("matched_skills_v2", "[]") or "[]"
+            parsed_v2  = json.loads(v2_matched)
+            if parsed_v2:
+                analysis["matched_skills"] = parsed_v2
+            else:
+                v1 = json.loads(analysis.get("matched_skills", "[]") or "[]")
+                analysis["matched_skills"] = [
+                    {"skill": s, "match_type": "exact",
+                     "jd_snippet": "", "resume_snippet": "", "category": "other"}
+                    for s in v1 if isinstance(s, str)
+                ]
+        except Exception:
+            analysis["matched_skills"] = []
+
+        try:
+            v2_missing = analysis.get("missing_skills_v2", "[]") or "[]"
+            parsed_v2  = json.loads(v2_missing)
+            if parsed_v2:
+                analysis["missing_skills"] = parsed_v2
+            else:
+                v1 = json.loads(analysis.get("missing_skills", "[]") or "[]")
+                analysis["missing_skills"] = [
+                    {"skill": s["skill"] if isinstance(s, dict) else s,
+                     "severity": s.get("severity", "minor") if isinstance(s, dict) else "minor",
+                     "requirement_type": s.get("requirement_type", "preferred") if isinstance(s, dict) else "preferred",
+                     "jd_snippet": "", "category": "other"}
+                    for s in v1
+                ]
+        except Exception:
+            analysis["missing_skills"] = []
+
+        try:
+            pb = analysis.get("penalty_breakdown")
+            if isinstance(pb, str):
+                analysis["penalty_breakdown"] = json.loads(pb)
+        except Exception:
+            analysis["penalty_breakdown"] = {}
+
+        try:
+            sugg = analysis.get("suggestions", "[]") or "[]"
+            analysis["suggestions"] = json.loads(sugg) if isinstance(sugg, str) else sugg
+        except Exception:
+            analysis["suggestions"] = []
+
+        if not analysis.get("adjusted_score"):
+            analysis["adjusted_score"] = analysis["score"]
+
+        analysis["used_fallback"] = bool(analysis.get("used_fallback", 0))
+
+    text_quality   = assess_job_text_quality(job.get("raw_description") or "")
+    comparison     = build_comparison(analyses)
+    last_resume_id = analyses[0]["resume_id"] if analyses else None
+
+    salary_data = json.loads(job["salary_estimate"]) if job.get("salary_estimate") else None
+    if analyses:
+        last_provider = analyses[0]["llm_provider"]
+        last_model    = analyses[0].get("llm_model", "")
+    elif salary_data and salary_data.get("llm_provider"):
+        last_provider = salary_data["llm_provider"]
+        last_model    = salary_data.get("llm_model", "")
+    else:
+        last_provider = "anthropic"
+        last_model    = ""
+
+    return JSONResponse({
+        "job":              job,
+        "application":      application,
+        "analyses":         analyses,
+        "resumes":          resumes,
+        "ollama_model":     last_model if last_provider == "ollama"    else _ollama_model(),
+        "anthropic_model":  last_model if last_provider == "anthropic" else anthropic_model(),
+        "openai_model":     last_model if last_provider == "openai"    else openai_model(),
+        "gemini_model":     last_model if last_provider == "gemini"    else gemini_model(),
+        "text_quality":     text_quality,
+        "comparison":       comparison,
+        "analysis_mode":    analyses[0].get("analysis_mode") or os.getenv("ANALYSIS_MODE", "standard") if analyses else os.getenv("ANALYSIS_MODE", "standard"),
+        "salary_estimate":  salary_data,
+        "has_salary_in_jd": _job_has_salary(job.get("raw_description", "")),
+        "last_resume_id":   last_resume_id,
+        "last_provider":    last_provider,
+    })
+
+
+# ── Providers status API ─────────────────────────────────────────────
+
+@app.get("/api/providers/status")
+async def get_providers_status():
+    """Return which providers are configured and reachable, plus default models."""
+    import httpx
+    from analyzer.config import ollama_base_url
+
+    has_ollama = False
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            r = await client.get(f"{ollama_base_url()}/api/tags")
+            has_ollama = r.status_code == 200
+    except Exception:
+        pass
+
+    return JSONResponse({
+        "has_anthropic":   bool(os.getenv("ANTHROPIC_API_KEY", "")),
+        "has_openai":      bool(os.getenv("OPENAI_API_KEY", "")),
+        "has_gemini":      bool(os.getenv("GEMINI_API_KEY", "")),
+        "has_ollama":      has_ollama,
+        "anthropic_model": anthropic_model(),
+        "openai_model":    openai_model(),
+        "gemini_model":    gemini_model(),
+        "ollama_model":    _ollama_model(),
+    })
+
+
+# ── Resumes list API ─────────────────────────────────────────────────────────
+
+@app.get("/api/resumes/")
+async def list_resumes(db: aiosqlite.Connection = Depends(get_db)):
+    """Return all saved resumes for the shared frontend."""
+    try:
+        async with db.execute(
+            "SELECT id, label, created_at, LENGTH(content) as char_count FROM resumes ORDER BY created_at DESC"
+        ) as cur:
+            resumes = [dict(r) for r in await cur.fetchall()]
+    except Exception as e:
+        logger.error(f"\u2717 list_resumes DB error: {e}")
+        return JSONResponse({"error": "Database error"}, status_code=500)
+    return JSONResponse({"resumes": resumes})
 
 
 # ── Ollama models proxy ──────────────────────────────────────────────────────
