@@ -30,6 +30,8 @@
           <label for="mode-url">URL</label>
           <input type="radio" name="add-mode" id="mode-paste" value="paste" />
           <label for="mode-paste">Paste</label>
+          <input type="radio" name="add-mode" id="mode-html" value="html" />
+          <label for="mode-html">HTML</label>
         </div>
       </div>
       <form id="add-job-form" class="add-job-bar">
@@ -61,8 +63,28 @@
           <textarea id="paste-description" placeholder="Paste the full job description here…"
                     style="min-height: 160px; font-size: 12px;"></textarea>
         </div>
-        <button class="btn btn-primary" id="paste-submit-btn" onclick="addJobManual()">Add Job</button>
+        <div class="flex gap-10 items-center">
+          <button class="btn btn-primary" id="paste-submit-btn" onclick="addJobManual()">Add Job</button>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="clearPasteForm()">Clear</button>
+        </div>
       </div>
+      <div id="html-job-form-wrap" class="card hidden" style="margin-bottom: 20px;">
+        <p class="text-dim text-xs" style="margin-bottom:12px;">
+          Paste the raw HTML from a job posting page (right-click → View Page Source, or F12 → copy outer HTML).
+          The job title, company, and description will be extracted automatically.
+        </p>
+        <div class="form-row" style="margin-bottom:14px;">
+          <label>Raw Job HTML</label>
+          <textarea id="html-input" placeholder="Paste the full page HTML here…"
+                    style="min-height:160px; font-size:11px; font-family:var(--font-mono);"></textarea>
+        </div>
+        <div class="flex gap-10 items-center">
+          <button class="btn btn-primary" id="html-parse-btn" onclick="parseJobHTML()">Extract &amp; Review</button>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="clearHTMLForm()">Clear</button>
+          <span id="html-parse-status" class="text-xs text-dim"></span>
+        </div>
+      </div>
+
       <div class="filter-bar">
         <div class="search-wrap">
           <input type="text" id="filter-search" placeholder="Search title, company, or recruiter…" autocomplete="off" />

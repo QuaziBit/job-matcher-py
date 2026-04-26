@@ -120,15 +120,198 @@ function initAddModeToggle() {
     radio.addEventListener('change', () => {
       const urlForm   = document.getElementById('add-job-form');
       const pasteForm = document.getElementById('paste-job-form-wrap');
+      const htmlForm  = document.getElementById('html-job-form-wrap');
+      urlForm.classList.add('hidden');
+      pasteForm.classList.add('hidden');
+      if (htmlForm) htmlForm.classList.add('hidden');
       if (radio.value === 'paste' && radio.checked) {
-        urlForm.classList.add('hidden');
         pasteForm.classList.remove('hidden');
+      } else if (radio.value === 'html' && radio.checked) {
+        if (htmlForm) htmlForm.classList.remove('hidden');
       } else {
         urlForm.classList.remove('hidden');
-        pasteForm.classList.add('hidden');
       }
     });
   });
+}
+
+
+// ── Paste job as HTML ────────────────────────────────────────────────────────
+
+function sanitizeJobHTML(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  const noiseSelectors = [
+    'script', 'style', 'noscript', 'iframe', 'nav', 'header', 'footer',
+    'aside', 'form', 'button', 'input', 'select', 'textarea',
+    '[class*="cookie"]', '[class*="banner"]', '[class*="popup"]',
+    '[class*="modal"]', '[class*="overlay"]',
+    '[id*="cookie"]', '[id*="banner"]', '[id*="nav"]',
+    '[id*="header"]', '[id*="footer"]', '[id*="sidebar"]',
+  ];
+  noiseSelectors.forEach(sel => {
+    try { doc.querySelectorAll(sel).forEach(el => el.remove()); } catch(e) {}
+  });
+
+  function extractText(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const tag = node.tagName.toLowerCase();
+    const blockTags = new Set(['p','div','section','article','li','h1','h2','h3','h4','h5','h6','br','tr','td','th']);
+    let t = Array.from(node.childNodes).map(extractText).join('');
+    if (blockTags.has(tag)) t = '\n' + t + '\n';
+    return t;
+  }
+
+  let text = extractText(doc.body || doc.documentElement);
+  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  text = text.replace(/[^\S\n]+/g, ' ');
+  // Collapse lines that are only whitespace to empty lines, then collapse 3+ newlines
+  text = text.replace(/\n[ \t]+\n/g, '\n\n');
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+function extractTitleFromHTML(doc) {
+  // Try common job title selectors in order of specificity
+  const selectors = [
+    'h1[class*="title"]', 'h1[class*="job"]', 'h1[class*="position"]',
+    '[class*="job-title"]', '[class*="jobtitle"]', '[class*="position-title"]',
+    '[data-testid*="title"]', '[data-automation*="title"]',
+    'h1',
+  ];
+  for (const sel of selectors) {
+    try {
+      const el = doc.querySelector(sel);
+      if (el && el.textContent.trim().length > 2) return el.textContent.trim();
+    } catch(e) {}
+  }
+  // Fallback: page title minus site name
+  const title = doc.title || '';
+  return title.split(/[|\-–—]/)[0].trim();
+}
+
+function extractCompanyFromHTML(doc) {
+  const selectors = [
+    '[class*="company"]', '[class*="employer"]', '[class*="org-name"]',
+    '[data-testid*="company"]', '[data-automation*="company"]',
+    '[itemprop="hiringOrganization"]', '[itemprop="name"]',
+  ];
+  for (const sel of selectors) {
+    try {
+      const el = doc.querySelector(sel);
+      if (el && el.textContent.trim().length > 1) return el.textContent.trim();
+    } catch(e) {}
+  }
+  return '';
+}
+
+// guessJobFields attempts to extract title, company, and location from
+// the first few lines of plain extracted text.
+function guessJobFields(text) {
+  var lines = text.split(/[\n\r]+/).map(function(l) { return l.trim(); }).filter(Boolean);
+  var locationRe = [
+    /\bremote\b/i,
+    /\b(?:hybrid|on.?site|onsite)\b/i,
+    /\b[A-Z]{2},?\s*(?:USA?|United States)\b/,
+    /\b(?:United States|Canada|United Kingdom|UK)\b/i,
+    /\b[A-Z][a-z]+,\s*[A-Z]{2}\b/,
+  ];
+  var title = '', company = '', location = '';
+  if (!lines.length) return { title: title, company: company, location: location };
+  title = lines[0];
+  for (var i = 1; i < Math.min(lines.length, 6); i++) {
+    var line = lines[i];
+    if (!location && locationRe.some(function(p) { return p.test(line); })) {
+      location = line;
+    } else if (!company && line.length > 1 && line.length < 80) {
+      company = line;
+    }
+    if (location && company) break;
+  }
+  return { title: title, company: company, location: location };
+}
+
+
+function parseJobHTML() {
+  const input   = document.getElementById('html-input');
+  const status  = document.getElementById('html-parse-status');
+  const btn     = document.getElementById('html-parse-btn');
+  if (!input || !status) return;
+
+  const raw = input.value.trim();
+  if (!raw) { toast('Please paste some HTML first', 'error'); return; }
+  if (raw.length < 100) { toast('HTML is too short — paste the full page source', 'error'); return; }
+
+  btn.disabled  = true;
+  status.textContent = 'Parsing…';
+
+  try {
+    const doc     = new DOMParser().parseFromString(raw, 'text/html');
+    const title   = extractTitleFromHTML(doc);
+    const company = extractCompanyFromHTML(doc);
+    const text    = sanitizeJobHTML(raw);
+
+    if (text.length < 50) {
+      status.textContent = 'Could not extract enough text — try selecting just the job description section';
+      status.style.color = 'var(--red)';
+      btn.disabled = false;
+      return;
+    }
+
+    // Switch to paste mode and populate fields
+    const htmlRadio  = document.getElementById('mode-html');
+    const pasteRadio = document.getElementById('mode-paste');
+    const htmlForm   = document.getElementById('html-job-form-wrap');
+    const pasteForm  = document.getElementById('paste-job-form-wrap');
+    const urlForm    = document.getElementById('add-job-form');
+
+    if (pasteRadio) pasteRadio.checked = true;
+    if (htmlForm)  htmlForm.classList.add('hidden');
+    if (urlForm)   urlForm.classList.add('hidden');
+    if (pasteForm) pasteForm.classList.remove('hidden');
+
+    // Populate paste form fields
+    const titleEl = document.getElementById('paste-title');
+    const compEl  = document.getElementById('paste-company');
+    const descEl  = document.getElementById('paste-description');
+
+    if (titleEl && !titleEl.value) titleEl.value = title;
+    if (compEl  && !compEl.value)  compEl.value  = company;
+    if (descEl)  descEl.value = text;
+
+    status.textContent = '';
+    toast(`✓ Extracted ${text.length.toLocaleString()} chars — review and save`, 'success');
+    log('parseJobHTML', `title="${title}" company="${company}" chars=${text.length}`);
+  } catch(err) {
+    logErr('parseJobHTML', 'error:', err);
+    status.textContent = 'Parse error';
+    status.style.color = 'var(--red)';
+  }
+  btn.disabled = false;
+}
+
+
+// ── Clear paste / HTML forms ─────────────────────────────────────────────────
+
+function clearPasteForm() {
+  const ids = ['paste-title', 'paste-company', 'paste-location', 'paste-url', 'paste-description'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const btn = document.getElementById('paste-submit-btn');
+  if (btn) { btn.disabled = false; btn.innerHTML = 'Add Job'; }
+  log('clearPasteForm', 'cleared');
+}
+
+function clearHTMLForm() {
+  const input = document.getElementById('html-input');
+  const status = document.getElementById('html-parse-status');
+  const btn = document.getElementById('html-parse-btn');
+  if (input)  input.value = '';
+  if (status) { status.textContent = ''; status.style.color = ''; }
+  if (btn)    { btn.disabled = false; }
+  log('clearHTMLForm', 'cleared');
 }
 
 

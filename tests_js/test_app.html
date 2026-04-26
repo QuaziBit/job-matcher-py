@@ -45,6 +45,15 @@
 </div>
 <input id="filter-search"    type="text"   value="">
 <input id="filter-date"      type="text"   value="" style="display:none">
+<input id="paste-title"       type="text"   value="" style="display:none">
+<input id="paste-company"     type="text"   value="" style="display:none">
+<input id="paste-location"    type="text"   value="" style="display:none">
+<input id="paste-url"         type="text"   value="" style="display:none">
+<textarea id="paste-description"            style="display:none"></textarea>
+<button id="paste-submit-btn"               style="display:none">Add Job</button>
+<textarea id="html-input"                   style="display:none"></textarea>
+<span id="html-parse-status"                style="display:none"></span>
+<button id="html-parse-btn"                 style="display:none">Extract</button>
 <input id="filter-date-from" type="text"   value="" style="display:none">
 <input id="filter-date-to"   type="text"   value="" style="display:none">
 <select id="filter-status">
@@ -681,6 +690,86 @@ test("clears all filter inputs", () => {
   assertEqual(document.getElementById("filter-score").value,    "");
   assertEqual(document.getElementById("filter-provider").value, "");
 });
+
+
+section("guessJobFields");
+
+test("extracts title from first line",   () => assertEqual(guessJobFields("Senior Go Developer\nAcme Corp\nRemote").title, "Senior Go Developer"));
+test("extracts company from second line",() => assertEqual(guessJobFields("Senior Go Developer\nAcme Corp\nRemote").company, "Acme Corp"));
+test("detects Remote as location",       () => assertContains(guessJobFields("Senior Go Developer\nAcme Corp\nRemote").location, "Remote"));
+test("detects VA, USA as location",      () => assertContains(guessJobFields("Engineer\nAcme\nManassas, VA, USA").location, "VA"));
+test("empty text returns empty fields",  () => { const f = guessJobFields(""); assertEqual(f.title, ""); assertEqual(f.company, ""); });
+test("single line \u2014 only title",   () => { const f = guessJobFields("Engineer"); assertEqual(f.title, "Engineer"); assertEqual(f.company, ""); });
+
+
+section("sanitizeJobHTML");
+
+test("removes script tags",          () => assertNotContains(sanitizeJobHTML('<html><body><sc' + 'ript>alert(1)</sc' + 'ript><p>Job description here</p></body></html>'), 'alert'));
+test("removes style tags",           () => assertNotContains(sanitizeJobHTML('<html><body><style>.a{color:red}</style><p>Job desc</p></body></html>'), 'color:red'));
+test("removes nav elements",         () => assertNotContains(sanitizeJobHTML('<html><body><nav>Menu</nav><p>Real content</p></body></html>'), 'Menu'));
+test("keeps paragraph text",         () => assertContains(sanitizeJobHTML('<html><body><p>Software Engineer role</p></body></html>'), 'Software Engineer role'));
+test("keeps h1 text",                () => assertContains(sanitizeJobHTML('<html><body><h1>Senior Dev</h1><p>We are hiring</p></body></html>'), 'Senior Dev'));
+test("collapses excess blank lines", () => { const out = sanitizeJobHTML('<html><body><p>A</p><p></p><p></p><p></p><p>B</p></body></html>'); assert(!out.includes('\n\n\n'), 'max 2 consecutive newlines'); });
+test("returns trimmed string",       () => { const out = sanitizeJobHTML('<html><body><p>Text</p></body></html>'); assertEqual(out.trim(), out); });
+test("empty body returns empty",     () => assertEqual(sanitizeJobHTML('<html><body></body></html>'), ''));
+
+
+section("extractTitleFromHTML");
+
+test("extracts h1 as title",         () => {
+  const doc = new DOMParser().parseFromString('<html><head><title>Jobs</title></head><body><h1>Senior Go Developer</h1></body></html>', 'text/html');
+  assertContains(extractTitleFromHTML(doc), 'Senior Go Developer');
+});
+test("falls back to page title",     () => {
+  const doc = new DOMParser().parseFromString('<html><head><title>DevSecOps Engineer | Acme</title></head><body></body></html>', 'text/html');
+  assertContains(extractTitleFromHTML(doc), 'DevSecOps Engineer');
+});
+test("strips site name from title",  () => {
+  const doc = new DOMParser().parseFromString('<html><head><title>Python Dev - LinkedIn</title></head><body></body></html>', 'text/html');
+  assertNotContains(extractTitleFromHTML(doc), 'LinkedIn');
+});
+
+
+section("extractCompanyFromHTML");
+
+test("extracts from company class",  () => {
+  const doc = new DOMParser().parseFromString('<html><body><div class="company-name">Acme Corp</div></body></html>', 'text/html');
+  assertContains(extractCompanyFromHTML(doc), 'Acme Corp');
+});
+test("returns string when not found",() => {
+  const doc = new DOMParser().parseFromString('<html><body><p>no company</p></body></html>', 'text/html');
+  assert(typeof extractCompanyFromHTML(doc) === 'string');
+});
+
+
+section("clearPasteForm");
+
+test("clears all paste form fields", () => {
+  document.getElementById('paste-title').value       = 'Dev';
+  document.getElementById('paste-company').value     = 'Acme';
+  document.getElementById('paste-location').value    = 'Remote';
+  document.getElementById('paste-url').value         = 'https://example.com';
+  document.getElementById('paste-description').value = 'Some description';
+  clearPasteForm();
+  assertEqual(document.getElementById('paste-title').value,       '');
+  assertEqual(document.getElementById('paste-company').value,     '');
+  assertEqual(document.getElementById('paste-location').value,    '');
+  assertEqual(document.getElementById('paste-url').value,         '');
+  assertEqual(document.getElementById('paste-description').value, '');
+});
+test("does not throw when fields missing", () => clearPasteForm());
+
+
+section("clearHTMLForm");
+
+test("clears html-input textarea", () => {
+  const el = document.getElementById('html-input');
+  if (!el) { assert(true); return; } // not on this page
+  el.value = '<html>some html</html>';
+  clearHTMLForm();
+  assertEqual(el.value, '');
+});
+test("does not throw when fields missing", () => clearHTMLForm());
 
 
 // ── Summary ───────────────────────────────────────────────────────────────────
