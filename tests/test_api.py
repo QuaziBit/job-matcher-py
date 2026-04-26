@@ -1695,3 +1695,36 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertIn("John Doe", resp.json()["text"])
+
+    # ── GET /api/resumes/{id} ──────────────────────────────────────────────
+
+    async def test_get_resume_returns_content(self):
+        """GET /api/resumes/{id} should return full resume content."""
+        add = await self.client.post("/api/resumes/add", data={
+            "label": "v1", "content": "John Doe\nSoftware Engineer\nPython Go Docker AWS\n" * 10,
+        })
+        rid = add.json()["resume_id"]
+
+        resp = await self.client.get(f"/api/resumes/{rid}")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("content", data)
+        self.assertIn("label", data)
+        self.assertIn("char_count", data)
+        self.assertEqual(data["label"], "v1")
+        self.assertIn("John Doe", data["content"])
+
+    async def test_get_resume_not_found_returns_404(self):
+        """GET /api/resumes/99999 should return 404."""
+        resp = await self.client.get("/api/resumes/99999")
+        self.assertEqual(resp.status_code, 404)
+
+    async def test_get_resume_char_count_matches_content(self):
+        """char_count should match actual content length."""
+        text = "John Doe\nSoftware Engineer\nPython Go Docker AWS\n" * 10
+        add = await self.client.post("/api/resumes/add", data={"label": "v1", "content": text})
+        rid = add.json()["resume_id"]
+
+        resp = await self.client.get(f"/api/resumes/{rid}")
+        data = resp.json()
+        self.assertEqual(data["char_count"], len(data["content"]))

@@ -481,6 +481,57 @@ async function deleteJob(jobId) {
 }
 
 
+// ── Resume viewer ────────────────────────────────────────────────────────────
+
+async function toggleResumeView(resumeId, btn) {
+  const panel = document.getElementById(`resume-view-${resumeId}`);
+  const textEl = document.getElementById(`resume-text-${resumeId}`);
+  if (!panel) return;
+
+  const isOpen = panel.style.display === 'block';
+  if (isOpen) {
+    panel.style.display = 'none';
+    btn.innerHTML = '&#9654; View';
+    return;
+  }
+
+  panel.style.display = 'block';
+  btn.innerHTML = '&#9660; Hide';
+
+  // Only fetch if not already loaded
+  if (textEl && textEl.dataset.loaded !== 'true') {
+    try {
+      const res  = await fetch(`/api/resumes/${resumeId}`);
+      const data = await res.json();
+      if (!res.ok) {
+        textEl.textContent = data.error || 'Failed to load resume.';
+        return;
+      }
+      textEl.textContent    = data.content;
+      textEl.dataset.loaded = 'true';
+    } catch(err) {
+      logErr('toggleResumeView', 'fetch threw:', err);
+      textEl.textContent = 'Network error loading resume.';
+    }
+  }
+}
+
+async function copyResumeText(resumeId) {
+  const textEl = document.getElementById(`resume-text-${resumeId}`);
+  if (!textEl || textEl.dataset.loaded !== 'true') {
+    toast('Open the resume first to copy it', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(textEl.textContent);
+    toast('\u2713 Resume copied to clipboard', 'success');
+  } catch(err) {
+    logErr('copyResumeText', 'clipboard error:', err);
+    toast('Copy failed — try selecting the text manually', 'error');
+  }
+}
+
+
 // ── Resume file extraction ───────────────────────────────────────────────────
 
 async function extractResumeFile(input) {
@@ -1564,14 +1615,31 @@ const TMPL = {
   resumeCard(r) {
     const date  = r.created_at ? r.created_at.slice(0, 16) : '';
     const chars = r.char_count != null ? r.char_count : (r.content ? r.content.length : 0);
+    const words = r.content ? r.content.trim().split(/\s+/).filter(Boolean).length : null;
+    const wordStr = words ? ` \u00b7 ${words.toLocaleString()} words` : '';
     return `
       <div class="card card-sm" style="margin-bottom: 10px;">
         <div class="flex justify-between items-center">
-          <div>
+          <div style="flex:1; min-width:0;">
             <div style="font-weight: 500; font-size: 14px;">${escHtml(r.label)}</div>
-            <div class="text-xs text-dim text-mono mt-4">${escHtml(date)} \u00b7 ${chars} chars</div>
+            <div class="text-xs text-dim text-mono mt-4">${escHtml(date)} \u00b7 ${chars.toLocaleString()} chars${wordStr}</div>
           </div>
-          <button class="btn btn-danger btn-sm" onclick="deleteResumeAndRefresh(${r.id})">Delete</button>
+          <div class="flex gap-10 items-center">
+            <button class="btn btn-ghost btn-sm" onclick="toggleResumeView(${r.id}, this)" title="View resume text">&#9654; View</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteResumeAndRefresh(${r.id})">Delete</button>
+          </div>
+        </div>
+        <div id="resume-view-${r.id}" style="display:none; margin-top:12px;">
+          <div class="flex justify-between items-center" style="margin-bottom:6px;">
+            <span class="text-xs text-dim">Resume content</span>
+            <button class="btn btn-ghost btn-xs" onclick="copyResumeText(${r.id})" style="font-size:11px;">&#128203; Copy</button>
+          </div>
+          <div id="resume-text-${r.id}" class="text-xs text-mono"
+               style="white-space:pre-wrap; background:var(--bg-card); border:1px solid var(--border);
+                      border-radius:4px; padding:12px; max-height:400px; overflow-y:auto;
+                      line-height:1.6; color:var(--text-dim);">
+            <span class="text-dim" style="font-style:italic;">Loading\u2026</span>
+          </div>
         </div>
       </div>`;
   },

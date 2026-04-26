@@ -375,11 +375,16 @@ const BASE_RESUME = { id:5, label:"v2 — tailored", created_at:"2024-06-01 12:0
 
 test("renders card div",                 () => assertContains(TMPL.resumeCard(BASE_RESUME), 'class="card'));
 test("renders label",                    () => assertContains(TMPL.resumeCard(BASE_RESUME), "v2 — tailored"));
-test("renders char count",               () => assertContains(TMPL.resumeCard(BASE_RESUME), "2400"));
+test("renders char count",               () => assertContains(TMPL.resumeCard(BASE_RESUME), "2,400"));
 test("renders date",                     () => assertContains(TMPL.resumeCard(BASE_RESUME), "2024-06-01"));
 test("delete button correct id",         () => assertContains(TMPL.resumeCard(BASE_RESUME), "deleteResumeAndRefresh(5)"));
 test("escapes HTML in label",            () => assertNotContains(TMPL.resumeCard({...BASE_RESUME, label:"<script>xss</sc" + "ript>"}), "<script>"));
 test("uses content.length when char_count null", () => assertContains(TMPL.resumeCard({id:1,label:"v1",created_at:"",char_count:null,content:"x".repeat(300)}), "300"));
+test("renders View button",              () => assertContains(TMPL.resumeCard(BASE_RESUME), "toggleResumeView(5"));
+test("renders viewer panel",             () => assertContains(TMPL.resumeCard(BASE_RESUME), 'id="resume-view-5"'));
+test("renders copy button",              () => assertContains(TMPL.resumeCard(BASE_RESUME), "copyResumeText(5)"));
+test("viewer panel hidden by default",   () => assertContains(TMPL.resumeCard(BASE_RESUME), 'display:none'));
+test("shows word count when content",    () => { const r = {...BASE_RESUME, content:"hello world foo bar baz"}; assertContains(TMPL.resumeCard(r), "words"); });
 
 
 section("TMPL.resumesEmpty");

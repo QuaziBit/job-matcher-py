@@ -766,6 +766,23 @@ async def add_resume(
     return JSONResponse({"resume_id": resume_id, "label": label.strip()})
 
 
+@app.get("/api/resumes/{resume_id}")
+async def get_resume(resume_id: int, db: aiosqlite.Connection = Depends(get_db)):
+    """Return full content of a single resume."""
+    try:
+        async with db.execute(
+            "SELECT id, label, content, created_at, LENGTH(content) as char_count FROM resumes WHERE id = ?",
+            (resume_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    except Exception as e:
+        logger.error(f"✗ get_resume DB error for id={resume_id}: {e}")
+        return JSONResponse({"error": "Database error"}, status_code=500)
+    if not row:
+        return JSONResponse({"error": "Resume not found."}, status_code=404)
+    return JSONResponse(dict(row))
+
+
 @app.delete("/api/resumes/{resume_id}")
 async def delete_resume(resume_id: int, db: aiosqlite.Connection = Depends(get_db)):
     try:
