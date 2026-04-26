@@ -4,7 +4,7 @@ import os
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
@@ -704,6 +704,48 @@ async def update_job_url(
 
     logger.info(f"✓ Job {job_id} URL updated to: {url}")
     return JSONResponse({"ok": True, "url": url})
+
+
+@app.post("/api/resumes/extract")
+async def extract_resume_file(file: UploadFile = File(...)):
+    """Extract plain text from an uploaded TXT, PDF, or DOCX file."""
+    filename = (file.filename or "").lower()
+    raw = await file.read()
+
+    try:
+        if filename.endswith(".txt"):
+            text = raw.decode("utf-8", errors="replace")
+
+        elif filename.endswith(".pdf"):
+            from pdfminer.high_level import extract_text_to_fp
+            from pdfminer.layout import LAParams
+            import io
+            out = io.StringIO()
+            extract_text_to_fp(io.BytesIO(raw), out, laparams=LAParams(), output_type="text", codec=None)
+            text = out.getvalue()
+
+        elif filename.endswith(".docx"):
+            from docx import Document
+            import io
+            doc = Document(io.BytesIO(raw))
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+        else:
+            return JSONResponse(
+                {"error": "Unsupported file type. Please upload a TXT, PDF, or DOCX file."},
+                status_code=422,
+            )
+    except Exception as e:
+        logger.error(f"✗ extract_resume_file error for {filename}: {e}")
+        return JSONResponse({"error": f"Failed to extract text from file: {e}"}, status_code=500)
+
+    text = clean_text(text.strip())
+    if len(text) < 50:
+        return JSONResponse(
+            {"error": "Could not extract enough text from the file (minimum 50 characters)."},
+            status_code=422,
+        )
+    return JSONResponse({"text": text, "char_count": len(text)})
 
 
 @app.post("/api/resumes/add")

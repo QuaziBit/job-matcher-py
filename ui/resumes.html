@@ -32,8 +32,16 @@
             <input type="text" name="label" placeholder="e.g. DevSecOps v2, Full-Stack General, Federal Contractor" />
           </div>
           <div class="form-row">
+            <label>Import from File <span class="text-dim" style="font-weight:normal;">(TXT, PDF, DOCX — optional)</span></label>
+            <div class="flex gap-10 items-center">
+              <input type="file" id="resume-file-input" accept=".txt,.pdf,.docx"
+                     style="flex:1; font-size:13px;" onchange="extractResumeFile(this)" />
+              <span id="resume-file-status" class="text-xs text-dim"></span>
+            </div>
+          </div>
+          <div class="form-row">
             <label>Resume Text</label>
-            <textarea name="content" placeholder="Paste your full resume text here…"
+            <textarea name="content" id="resume-content" placeholder="Paste your full resume text here, or import a file above…"
                       style="min-height: 200px; font-family: var(--font-mono); font-size: 11px;"></textarea>
           </div>
           <button type="submit" class="btn btn-primary">Save Resume</button>

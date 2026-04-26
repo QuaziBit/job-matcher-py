@@ -1654,3 +1654,44 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
             async with db.execute("SELECT url FROM jobs WHERE id = ?", (jid,)) as cur:
                 row = await cur.fetchone()
         self.assertTrue(row["url"].startswith("manual://"))
+
+    # ── POST /api/resumes/extract ──────────────────────────────────────────
+
+    async def test_extract_resume_txt(self):
+        """TXT file should be extracted and returned as text."""
+        content = b"John Doe\nSoftware Engineer\nPython, Go, Docker, AWS, PostgreSQL\n" * 5
+        resp = await self.client.post(
+            "/api/resumes/extract",
+            files={"file": ("resume.txt", content, "text/plain")},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("text", data)
+        self.assertIn("char_count", data)
+        self.assertGreater(data["char_count"], 0)
+
+    async def test_extract_resume_unsupported_type(self):
+        """Unsupported file type should return 422."""
+        resp = await self.client.post(
+            "/api/resumes/extract",
+            files={"file": ("resume.md", b"# Resume", "text/markdown")},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_extract_resume_txt_too_short(self):
+        """TXT file with less than 50 chars should return 422."""
+        resp = await self.client.post(
+            "/api/resumes/extract",
+            files={"file": ("resume.txt", b"Too short", "text/plain")},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_extract_resume_txt_content_matches(self):
+        """Extracted text should match the uploaded content."""
+        text = b"John Doe\nSenior Python Developer\nSkills: Python, FastAPI, PostgreSQL, Docker, AWS, CI/CD\n"
+        resp = await self.client.post(
+            "/api/resumes/extract",
+            files={"file": ("resume.txt", text, "text/plain")},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("John Doe", resp.json()["text"])

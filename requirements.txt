@@ -9,6 +9,8 @@ openai==1.45.0
 google-genai>=1.0.0
 python-dotenv==1.0.1
 aiosqlite==0.20.0
+pdfminer.six==20231228
+python-docx==1.1.2
 # pysqlite3-binary  — optional, Linux only
 #   Install only if you get "No module named _sqlite3" on a minimal Linux system:
 #   pip install pysqlite3-binary

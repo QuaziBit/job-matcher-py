@@ -481,6 +481,64 @@ async function deleteJob(jobId) {
 }
 
 
+// ── Resume file extraction ───────────────────────────────────────────────────
+
+async function extractResumeFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const status   = document.getElementById('resume-file-status');
+  const textarea = document.getElementById('resume-content');
+  const labelEl  = document.querySelector('#add-resume-form input[name="label"]');
+  if (!status || !textarea) return;
+
+  // Auto-populate label from filename if label is still empty
+  if (labelEl && !labelEl.value.trim()) {
+    labelEl.value = file.name; // use full filename including extension as label
+  }
+
+  const name = file.name.toLowerCase();
+  status.textContent = 'Extracting…';
+  status.style.color = 'var(--text-dim)';
+
+  try {
+    // TXT — read client-side, no server round-trip needed
+    if (name.endsWith('.txt')) {
+      const text = await file.text();
+      textarea.value = text.trim();
+      status.textContent = `✓ ${text.trim().length.toLocaleString()} chars extracted`;
+      status.style.color = 'var(--green)';
+      return;
+    }
+
+    // PDF / DOCX — send to server for extraction
+    if (name.endsWith('.pdf') || name.endsWith('.docx')) {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res  = await fetch('/api/resumes/extract', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        status.textContent = data.error || 'Extraction failed';
+        status.style.color = 'var(--red)';
+        return;
+      }
+      textarea.value = data.text;
+      status.textContent = `✓ ${data.char_count.toLocaleString()} chars extracted`;
+      status.style.color = 'var(--green)';
+      return;
+    }
+
+    status.textContent = 'Unsupported file type';
+    status.style.color = 'var(--red)';
+
+  } catch(err) {
+    logErr('extractResumeFile', 'error:', err);
+    status.textContent = 'Error reading file';
+    status.style.color = 'var(--red)';
+  }
+}
+
+
 // ── Edit / save job URL ───────────────────────────────────────────────────────
 
 function toggleUrlEdit() {
