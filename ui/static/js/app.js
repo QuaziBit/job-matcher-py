@@ -2430,12 +2430,20 @@ async function refreshJobDetailPage() {
 function renderJobDetailPage(d, providers, email) {
   const main = document.getElementById('job-detail-main');
   const job  = d.job || {};
+
+  // Remember active tab before re-render so we can restore it after
+  const activeTabEl = document.querySelector('.tab.active');
+  const activeTab   = activeTabEl ? activeTabEl.dataset.tab : null;
+
   document.title = `${job.title || 'Job Detail'} \u2014 Job Matcher`;
   main.innerHTML = TMPL.jobDetailPage(d, providers, email);
   initTabs();
   document.querySelectorAll('input[name="provider"]').forEach(r => r.addEventListener('change', updateProviderModelRow));
   updateProviderModelRow();
-  if (window.location.hash) activateTab(window.location.hash.replace('#', ''));
+
+  // Restore previously active tab, or fall back to URL hash
+  if (activeTab) activateTab(activeTab);
+  else if (window.location.hash) activateTab(window.location.hash.replace('#', ''));
   document.querySelectorAll("[id^='meter-']").forEach(el => {
     const block  = el.closest('.analysis-block');
     const badges = block ? block.querySelectorAll('.score-badge') : [];
