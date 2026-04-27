@@ -665,6 +665,62 @@ async def delete_job(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
     return JSONResponse({"ok": True})
 
 
+# ── Job email endpoints ──────────────────────────────────────────────────────
+
+@app.get("/api/jobs/{job_id}/email")
+async def get_job_email(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
+    """Return saved email HTML for a job, or null if none saved."""
+    try:
+        async with db.execute(
+            "SELECT id, raw_html, created_at FROM job_emails WHERE job_id = ?", (job_id,)
+        ) as cur:
+            row = await cur.fetchone()
+    except Exception as e:
+        logger.error(f"✗ get_job_email DB error for job {job_id}: {e}")
+        return JSONResponse({"error": "Database error"}, status_code=500)
+    if not row:
+        return JSONResponse({"email": None})
+    return JSONResponse({"email": {"id": row[0], "raw_html": row[1], "created_at": row[2]}})
+
+
+@app.post("/api/jobs/{job_id}/email")
+async def save_job_email(
+    job_id: int,
+    raw_html: str = Form(...),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Save or replace the email HTML for a job."""
+    raw_html = raw_html.strip()
+    if not raw_html:
+        return JSONResponse({"error": "raw_html is required"}, status_code=422)
+    try:
+        await db.execute(
+            """INSERT INTO job_emails (job_id, raw_html)
+               VALUES (?, ?)
+               ON CONFLICT(job_id) DO UPDATE SET raw_html=excluded.raw_html,
+               created_at=CURRENT_TIMESTAMP""",
+            (job_id, raw_html),
+        )
+        await db.commit()
+    except Exception as e:
+        logger.error(f"✗ save_job_email DB error for job {job_id}: {e}")
+        return JSONResponse({"error": "Failed to save email."}, status_code=500)
+    logger.info(f"✓ Email saved for job {job_id}")
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/api/jobs/{job_id}/email")
+async def delete_job_email(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
+    """Delete the saved email for a job."""
+    try:
+        await db.execute("DELETE FROM job_emails WHERE job_id = ?", (job_id,))
+        await db.commit()
+    except Exception as e:
+        logger.error(f"✗ delete_job_email DB error for job {job_id}: {e}")
+        return JSONResponse({"error": "Failed to delete email."}, status_code=500)
+    return JSONResponse({"ok": True})
+
+
 @app.patch("/api/jobs/{job_id}/url")
 async def update_job_url(
     job_id: int,

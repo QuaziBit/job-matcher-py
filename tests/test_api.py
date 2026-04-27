@@ -1728,3 +1728,87 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         resp = await self.client.get(f"/api/resumes/{rid}")
         data = resp.json()
         self.assertEqual(data["char_count"], len(data["content"]))
+
+    # ── /api/jobs/{id}/email ───────────────────────────────────────────────
+
+    async def test_get_job_email_returns_null_when_none(self):
+        """GET /api/jobs/{id}/email returns null when no email saved."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        r = await self.client.get(f"/api/jobs/{jid}/email")
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.json()["email"])
+
+    async def test_save_and_get_job_email(self):
+        """POST then GET should return the saved email."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        html = "<html><body><p>Interview confirmed for Monday.</p></body></html>"
+        save = await self.client.post(f"/api/jobs/{jid}/email", data={"raw_html": html})
+        self.assertEqual(save.status_code, 200)
+        self.assertTrue(save.json()["ok"])
+
+        r = await self.client.get(f"/api/jobs/{jid}/email")
+        self.assertEqual(r.status_code, 200)
+        data = r.json()["email"]
+        self.assertIsNotNone(data)
+        self.assertEqual(data["raw_html"], html)
+
+    async def test_save_job_email_upserts(self):
+        """Saving again should replace the previous email."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        await self.client.post(f"/api/jobs/{jid}/email", data={"raw_html": "<p>First</p>"})
+        await self.client.post(f"/api/jobs/{jid}/email", data={"raw_html": "<p>Second</p>"})
+
+        r = await self.client.get(f"/api/jobs/{jid}/email")
+        self.assertIn("Second", r.json()["email"]["raw_html"])
+
+    async def test_save_job_email_empty_returns_422(self):
+        """POST with empty raw_html should return 422."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        r = await self.client.post(f"/api/jobs/{jid}/email", data={"raw_html": ""})
+        self.assertEqual(r.status_code, 422)
+
+    async def test_delete_job_email(self):
+        """DELETE should remove the saved email."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        await self.client.post(f"/api/jobs/{jid}/email", data={"raw_html": "<p>Email</p>"})
+        r = await self.client.delete(f"/api/jobs/{jid}/email")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["ok"])
+
+        r2 = await self.client.get(f"/api/jobs/{jid}/email")
+        self.assertIsNone(r2.json()["email"])
+
+    async def test_email_cascades_on_job_delete(self):
+        """Deleting a job should also delete its email via FK cascade."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/email", data={"raw_html": "<p>Email</p>"})
+        await self.client.delete(f"/api/jobs/{jid}")
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            async with db.execute("SELECT COUNT(*) FROM job_emails WHERE job_id = ?", (jid,)) as cur:
+                count = (await cur.fetchone())[0]
+        self.assertEqual(count, 0)

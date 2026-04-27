@@ -664,6 +664,110 @@ async function deleteJob(jobId) {
 }
 
 
+// ── Email tab ────────────────────────────────────────────────────────────────
+
+function sanitizeEmailHTML(html) {
+  if (!html) return '';
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  ['script','style','noscript','img','svg','iframe','head'].forEach(tag => {
+    doc.querySelectorAll(tag).forEach(el => el.remove());
+  });
+
+  function extractText(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const tag = node.tagName.toLowerCase();
+    const blockTags = new Set(['p','div','tr','td','th','br','h1','h2','h3','h4','li','section']);
+    let t = Array.from(node.childNodes).map(extractText).join('');
+    if (blockTags.has(tag)) t = '\n' + t + '\n';
+    return t;
+  }
+
+  let text = extractText(doc.body || doc.documentElement);
+  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  text = text.replace(/[^\S\n]+/g, ' ');
+  text = text.replace(/\n[ \t]+\n/g, '\n\n');
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+function extractEmailLinks(html) {
+  if (!html) return [];
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const seen = new Set();
+  const links = [];
+  doc.querySelectorAll('a[href]').forEach(a => {
+    const href = (a.getAttribute('href') || '').trim();
+    const text = (a.textContent || '').trim().slice(0, 80);
+    if (!href || href.startsWith('#') || href.startsWith('mailto:')) return;
+    // Skip common tracking/unsubscribe links
+    const lower = href.toLowerCase();
+    if (/unsubscr|optout|track|pixel|open\.php|click\.php|beacon|img\.php/.test(lower)) return;
+    if (seen.has(href)) return;
+    seen.add(href);
+    links.push({ href, text: text || href.slice(0, 60) });
+  });
+  return links;
+}
+
+function renderEmailLinks(links) {
+  if (!links.length) return '';
+  const items = links.map((l, i) =>
+    `<div style="margin-bottom:6px;">
+       <span class="text-dim text-xs" style="margin-right:6px;">${i+1}.</span>
+       <a href="${escHtml(l.href)}" target="_blank" style="color:var(--amber); font-size:12px;">
+         ${escHtml(l.text)}
+       </a>
+     </div>`
+  ).join('');
+  return `<div>
+    <div class="text-xs text-dim" style="margin-bottom:8px; font-weight:500;">
+      Extracted Links (${links.length})
+    </div>
+    ${items}
+  </div>`;
+}
+
+function showEmailInput(jobId) {
+  const inputArea   = document.getElementById('email-input-area');
+  const previewArea = document.getElementById('email-preview-area');
+  if (inputArea)   inputArea.style.display   = '';
+  if (previewArea) previewArea.style.display  = 'none';
+}
+
+async function saveEmail(jobId) {
+  const input  = document.getElementById('email-raw-input');
+  const status = document.getElementById('email-save-status');
+  if (!input || !input.value.trim()) { toast('Please paste email HTML first', 'error'); return; }
+
+  status.textContent = 'Saving…';
+  const fd = new FormData();
+  fd.append('raw_html', input.value.trim());
+  try {
+    const res  = await fetch(`/api/jobs/${jobId}/email`, { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || 'Failed to save email', 'error'); status.textContent = ''; return; }
+    toast('✓ Email saved', 'success');
+    refreshJobDetailPage();
+  } catch(e) {
+    logErr('saveEmail', 'fetch threw:', e);
+    toast('Network error', 'error');
+    status.textContent = '';
+  }
+}
+
+async function deleteEmail(jobId) {
+  if (!confirm('Delete the saved email for this job?')) return;
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/email`, { method: 'DELETE' });
+    if (res.ok) { toast('Email deleted', 'info'); refreshJobDetailPage(); }
+    else toast('Failed to delete email', 'error');
+  } catch(e) {
+    logErr('deleteEmail', 'fetch threw:', e);
+    toast('Network error', 'error');
+  }
+}
+
+
 // ── Resume viewer ────────────────────────────────────────────────────────────
 
 async function toggleResumeView(resumeId, btn) {
@@ -1717,13 +1821,56 @@ const TMPL = {
 
 
   // Tab container: wraps all tabs and their content panels
-  tabContainer(comp, analysisTabContent, applicationTab, descriptionTab, compareTab) {
+  emailTab(jobId, email) {
+    const hasEmail  = email && email.raw_html;
+    const inputArea = `
+      <div id="email-input-area" style="${hasEmail ? 'display:none' : ''}">
+        <p class="text-dim text-xs" style="margin-bottom:10px;">
+          Paste the raw HTML from your confirmation or response email.
+          Links will be extracted automatically.
+        </p>
+        <div class="form-row" style="margin-bottom:10px;">
+          <textarea id="email-raw-input" placeholder="Paste email HTML here…"
+                    style="min-height:140px; font-size:11px; font-family:var(--font-mono);"></textarea>
+        </div>
+        <div class="flex gap-10 items-center">
+          <button class="btn btn-primary btn-sm" onclick="saveEmail(${jobId})">Save Email</button>
+          <span id="email-save-status" class="text-xs text-dim"></span>
+        </div>
+      </div>`;
+
+    const preview = hasEmail ? `
+      <div id="email-preview-area">
+        <div class="flex justify-between items-center" style="margin-bottom:8px;">
+          <span class="text-xs text-dim">Saved ${escHtml(email.created_at ? email.created_at.slice(0,16) : '')}</span>
+          <div class="flex gap-10">
+            <button class="btn btn-ghost btn-xs" onclick="showEmailInput(${jobId})">&#9998; Replace</button>
+            <button class="btn btn-danger btn-xs" onclick="deleteEmail(${jobId})">Delete</button>
+          </div>
+        </div>
+        <div id="email-rendered" class="text-xs"
+             style="background:var(--bg-card); border:1px solid var(--border); border-radius:4px;
+                    padding:12px; max-height:320px; overflow-y:auto; line-height:1.6; white-space:pre-wrap;
+                    font-family:var(--font-mono); color:var(--text-dim);">
+          ${escHtml(sanitizeEmailHTML(email.raw_html))}
+        </div>
+        <div id="email-links-area" style="margin-top:12px;"></div>
+      </div>` : '';
+
+    return `<div class="tab-content" data-tab-content="email">
+      ${inputArea}
+      ${preview}
+    </div>`;
+  },
+
+  tabContainer(comp, analysisTabContent, applicationTab, descriptionTab, compareTab, emailTab) {
     return `
       <div class="tab-container">
         <div class="tabs">
           <button class="tab active" data-tab="analysis">Analysis</button>
           <button class="tab" data-tab="application">Application</button>
           <button class="tab" data-tab="description">Job Description</button>
+          <button class="tab" data-tab="email">&#9993; Email</button>
           ${TMPL.compareTabBtn(comp)}
         </div>
         <div class="tab-content active" data-tab-content="analysis">
@@ -1731,6 +1878,7 @@ const TMPL = {
         </div>
         ${applicationTab}
         ${descriptionTab}
+        ${emailTab}
         ${compareTab}
       </div>`;
   },
@@ -2026,7 +2174,7 @@ const TMPL = {
 
   // ── Job detail page ─────────────────────────────────────────────────────────
 
-  jobDetailPage(d, providers) {
+  jobDetailPage(d, providers, email) {
     const job  = d.job || {};
     const app  = d.application || {};
     const sal  = d.salary_estimate;
@@ -2051,10 +2199,11 @@ const TMPL = {
     const analysisTabContent = `
       ${TMPL.analysisCard(job, d, resumes, providerRadios, resumeSelectHtml, modeOpts, salaryBtnHtml, tqWarning)}
       ${TMPL.analysesSection(analyses)}`;
+    const emailTabHtml = TMPL.emailTab(job.id, email || null);
 
     return `
       ${TMPL.pageHeader(job, statusClass, statusLabel, urlHtml, salaryHtml)}
-      ${TMPL.tabContainer(comp, analysisTabContent, TMPL.applicationTab(job, app), TMPL.descriptionTab(job, tq), TMPL.compareTab(comp))}`;
+      ${TMPL.tabContainer(comp, analysisTabContent, TMPL.applicationTab(job, app), TMPL.descriptionTab(job, tq), TMPL.compareTab(comp), emailTabHtml)}`;
   }
 
 };
@@ -2235,14 +2384,20 @@ async function initJobDetailPage() {
   _currentJobId = parseInt(match[1], 10);
   log('initJobDetailPage', `jobId=${_currentJobId}`);
   try {
-    const [detailRes, statusRes] = await Promise.all([
+    const [detailRes, statusRes, emailRes] = await Promise.all([
       fetch(`/api/jobs/${_currentJobId}/detail`),
       fetch('/api/providers/status'),
+      fetch(`/api/jobs/${_currentJobId}/email`),
     ]);
     if (!detailRes.ok) { main.innerHTML = TMPL.emptyPanel('Job not found.'); return; }
     const detail    = await detailRes.json();
     const providers = statusRes.ok ? await statusRes.json() : {};
-    renderJobDetailPage(detail, providers);
+    const emailData = emailRes.ok ? await emailRes.json() : {};
+    renderJobDetailPage(detail, providers, emailData.email || null);
+    if (emailData.email) {
+      const linksEl = document.getElementById('email-links-area');
+      if (linksEl) linksEl.innerHTML = renderEmailLinks(extractEmailLinks(emailData.email.raw_html));
+    }
   } catch(e) {
     logErr('initJobDetailPage', 'fetch threw:', e);
     main.innerHTML = TMPL.emptyPanel('Failed to load job.');
@@ -2253,24 +2408,30 @@ async function refreshJobDetailPage() {
   if (!_currentJobId) return;
   log('refreshJobDetailPage', `jobId=${_currentJobId}`);
   try {
-    const [detailRes, statusRes] = await Promise.all([
+    const [detailRes, statusRes, emailRes] = await Promise.all([
       fetch(`/api/jobs/${_currentJobId}/detail`),
       fetch('/api/providers/status'),
+      fetch(`/api/jobs/${_currentJobId}/email`),
     ]);
     if (!detailRes.ok) return;
     const detail    = await detailRes.json();
     const providers = statusRes.ok ? await statusRes.json() : {};
-    renderJobDetailPage(detail, providers);
+    const emailData = emailRes.ok ? await emailRes.json() : {};
+    renderJobDetailPage(detail, providers, emailData.email || null);
+    if (emailData.email) {
+      const linksEl = document.getElementById('email-links-area');
+      if (linksEl) linksEl.innerHTML = renderEmailLinks(extractEmailLinks(emailData.email.raw_html));
+    }
   } catch(e) {
     logErr('refreshJobDetailPage', 'fetch threw:', e);
   }
 }
 
-function renderJobDetailPage(d, providers) {
+function renderJobDetailPage(d, providers, email) {
   const main = document.getElementById('job-detail-main');
   const job  = d.job || {};
   document.title = `${job.title || 'Job Detail'} \u2014 Job Matcher`;
-  main.innerHTML = TMPL.jobDetailPage(d, providers);
+  main.innerHTML = TMPL.jobDetailPage(d, providers, email);
   initTabs();
   document.querySelectorAll('input[name="provider"]').forEach(r => r.addEventListener('change', updateProviderModelRow));
   updateProviderModelRow();

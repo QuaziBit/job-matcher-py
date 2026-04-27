@@ -513,16 +513,18 @@ test("no tqWarning when level ok",      () => assertNotContains(TMPL.description
 
 section("TMPL.tabContainer");
 
-test("renders tab-container div",       () => assertContains(TMPL.tabContainer(null,"","","",""), "tab-container"));
-test("renders Analysis tab",            () => assertContains(TMPL.tabContainer(null,"","","",""), "Analysis"));
-test("renders Application tab",         () => assertContains(TMPL.tabContainer(null,"","","",""), "Application"));
-test("renders Job Description tab",     () => assertContains(TMPL.tabContainer(null,"","","",""), "Job Description"));
-test("renders Compare when comp set",   () => assertContains(TMPL.tabContainer({},"","","",""), "Compare"));
-test("no Compare when comp null",       () => assertNotContains(TMPL.tabContainer(null,"","","",""), "Compare"));
-test("injects analysisTabContent",      () => assertContains(TMPL.tabContainer(null,"ANALYSIS_CONTENT","","",""), "ANALYSIS_CONTENT"));
-test("injects applicationTab",          () => assertContains(TMPL.tabContainer(null,"","APP_TAB","",""), "APP_TAB"));
-test("injects descriptionTab",          () => assertContains(TMPL.tabContainer(null,"","","DESC_TAB",""), "DESC_TAB"));
-test("injects compareTab",              () => assertContains(TMPL.tabContainer(null,"","","","CMP_TAB"), "CMP_TAB"));
+test("renders tab-container div",       () => assertContains(TMPL.tabContainer(null,"","","","",""), "tab-container"));
+test("renders Analysis tab",            () => assertContains(TMPL.tabContainer(null,"","","","",""), "Analysis"));
+test("renders Application tab",         () => assertContains(TMPL.tabContainer(null,"","","","",""), "Application"));
+test("renders Job Description tab",     () => assertContains(TMPL.tabContainer(null,"","","","",""), "Job Description"));
+test("renders Email tab",               () => assertContains(TMPL.tabContainer(null,"","","","",""), "email"));
+test("renders Compare when comp set",   () => assertContains(TMPL.tabContainer({},"","","","",""), "Compare"));
+test("no Compare when comp null",       () => assertNotContains(TMPL.tabContainer(null,"","","","",""), "Compare"));
+test("injects analysisTabContent",      () => assertContains(TMPL.tabContainer(null,"ANALYSIS_CONTENT","","","",""), "ANALYSIS_CONTENT"));
+test("injects applicationTab",          () => assertContains(TMPL.tabContainer(null,"","APP_TAB","","",""), "APP_TAB"));
+test("injects descriptionTab",          () => assertContains(TMPL.tabContainer(null,"","","DESC_TAB","",""), "DESC_TAB"));
+test("injects emailTab",                () => assertContains(TMPL.tabContainer(null,"","","","","EMAIL_TAB"), "EMAIL_TAB"));
+test("injects compareTab",              () => assertContains(TMPL.tabContainer(null,"","","","CMP_TAB",""), "CMP_TAB"));
 
 
 section("TMPL.analysesSection");
@@ -709,7 +711,7 @@ test("removes style tags",           () => assertNotContains(sanitizeJobHTML('<h
 test("removes nav elements",         () => assertNotContains(sanitizeJobHTML('<html><body><nav>Menu</nav><p>Real content</p></body></html>'), 'Menu'));
 test("keeps paragraph text",         () => assertContains(sanitizeJobHTML('<html><body><p>Software Engineer role</p></body></html>'), 'Software Engineer role'));
 test("keeps h1 text",                () => assertContains(sanitizeJobHTML('<html><body><h1>Senior Dev</h1><p>We are hiring</p></body></html>'), 'Senior Dev'));
-test("collapses excess blank lines", () => { const out = sanitizeJobHTML('<html><body><p>A</p><p></p><p></p><p></p><p>B</p></body></html>'); assert(!out.includes('\n\n\n'), 'max 2 consecutive newlines'); });
+test("collapses excess blank lines", () => { const out = sanitizeJobHTML('<html><body><p>A</p><p></p><p></p><p></p><p>B</p></body></html>'); assert(!out.includes('\\n\\n\\n'), 'max 2 consecutive newlines'); });
 test("returns trimmed string",       () => { const out = sanitizeJobHTML('<html><body><p>Text</p></body></html>'); assertEqual(out.trim(), out); });
 test("empty body returns empty",     () => assertEqual(sanitizeJobHTML('<html><body></body></html>'), ''));
 
@@ -770,6 +772,67 @@ test("clears html-input textarea", () => {
   assertEqual(el.value, '');
 });
 test("does not throw when fields missing", () => clearHTMLForm());
+
+
+section("sanitizeEmailHTML");
+
+test("returns empty for null",          () => assertEqual(sanitizeEmailHTML(null), ''));
+test("returns empty for empty",         () => assertEqual(sanitizeEmailHTML(''), ''));
+test("removes script tags",             () => assertNotContains(sanitizeEmailHTML('<sc' + 'ript>x</sc' + 'ript><p>Hello</p>'), 'x'));
+test("removes img tags",               () => assertNotContains(sanitizeEmailHTML('<img src="track.gif"/><p>Text</p>'), 'track.gif'));
+test("keeps text content",             () => assertContains(sanitizeEmailHTML('<p>Interview confirmed</p>'), 'Interview confirmed'));
+test("collapses excess blank lines",   () => { const out = sanitizeEmailHTML('<p>A</p><p></p><p></p><p>B</p>'); assert(!out.includes('\n\n\n'), 'max 2 newlines'); });
+
+
+section("extractEmailLinks");
+
+test("returns empty for null",          () => assertEqual(extractEmailLinks(null).length, 0));
+test("returns empty for no links",      () => assertEqual(extractEmailLinks('<p>No links</p>').length, 0));
+test("extracts href links",            () => {
+  const links = extractEmailLinks('<a href="https://example.com/interview">Schedule</a>');
+  assertEqual(links.length, 1);
+  assertEqual(links[0].href, 'https://example.com/interview');
+});
+test("extracts link text",             () => {
+  const links = extractEmailLinks('<a href="https://example.com">Click here</a>');
+  assertContains(links[0].text, 'Click here');
+});
+test("deduplicates same href",         () => {
+  const links = extractEmailLinks('<a href="https://x.com">A</a><a href="https://x.com">B</a>');
+  assertEqual(links.length, 1);
+});
+test("skips anchor links",            () => assertEqual(extractEmailLinks('<a href="#section">Jump</a>').length, 0));
+test("skips mailto links",            () => assertEqual(extractEmailLinks('<a href="mailto:a@b.com">Email</a>').length, 0));
+test("skips tracking links",          () => assertEqual(extractEmailLinks('<a href="https://x.com/track?id=1">x</a>').length, 0));
+test("skips unsubscribe links",       () => assertEqual(extractEmailLinks('<a href="https://x.com/unsubscribe">x</a>').length, 0));
+
+
+section("renderEmailLinks");
+
+test("empty array returns empty string", () => assertEqual(renderEmailLinks([]), ''));
+test("renders link count",              () => assertContains(renderEmailLinks([{href:'https://x.com',text:'X'}]), '1'));
+test("renders href in anchor",          () => assertContains(renderEmailLinks([{href:'https://x.com',text:'X'}]), 'https://x.com'));
+test("renders link text",               () => assertContains(renderEmailLinks([{href:'https://x.com',text:'Schedule Interview'}]), 'Schedule Interview'));
+test("escapes HTML in text",            () => assertNotContains(renderEmailLinks([{href:'https://x.com',text:'<b>bad</b>'}]), '<b>'));
+
+
+section("TMPL.emailTab");
+
+test("renders tab-content email",       () => assertContains(TMPL.emailTab(1, null), 'data-tab-content="email"'));
+test("no email — shows input area",     () => assertContains(TMPL.emailTab(1, null), 'email-raw-input'));
+test("no email — shows save button",    () => assertContains(TMPL.emailTab(1, null), 'saveEmail(1)'));
+test("with email — shows preview",      () => {
+  const email = {raw_html: '<p>Hello</p>', created_at: '2024-06-01 12:00:00'};
+  assertContains(TMPL.emailTab(1, email), 'email-preview-area');
+});
+test("with email — shows replace btn",  () => {
+  const email = {raw_html: '<p>Hello</p>', created_at: '2024-06-01 12:00:00'};
+  assertContains(TMPL.emailTab(1, email), 'showEmailInput(1)');
+});
+test("with email — shows delete btn",   () => {
+  const email = {raw_html: '<p>Hello</p>', created_at: '2024-06-01 12:00:00'};
+  assertContains(TMPL.emailTab(1, email), 'deleteEmail(1)');
+});
 
 
 // ── Summary ───────────────────────────────────────────────────────────────────

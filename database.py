@@ -40,6 +40,7 @@ def _db_path() -> str:
 async def get_db():
     db = await aiosqlite.connect(_db_path())
     db.row_factory = aiosqlite.Row
+    await db.execute("PRAGMA foreign_keys = ON")
     try:
         yield db
     finally:
@@ -92,6 +93,14 @@ async def init_db():
                 recruiter_phone TEXT,
                 notes TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS job_emails (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL UNIQUE,
+                raw_html TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
             );
         """)
