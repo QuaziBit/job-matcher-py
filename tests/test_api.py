@@ -12,6 +12,7 @@ from analyzer.config import anthropic_model
 from tests.mock_data import (
     MOCK_RESUME_DEVSECOPS,
     MOCK_JOB_DEVSECOPS,
+    MOCK_JOB_MARKETING,
 )
 
 
@@ -1812,3 +1813,62 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
             async with db.execute("SELECT COUNT(*) FROM job_emails WHERE job_id = ?", (jid,)) as cur:
                 count = (await cur.fetchone())[0]
         self.assertEqual(count, 0)
+
+    # ── GET /api/vetting ───────────────────────────────────────────────────
+
+    async def test_vetting_returns_companies_and_recruiters_keys(self):
+        """GET /api/vetting should return companies and recruiters keys."""
+        resp = await self.client.get("/api/vetting")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("companies", data)
+        self.assertIn("recruiters", data)
+
+    async def test_vetting_groups_by_company(self):
+        """Jobs should be grouped by company name."""
+        await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev A", "company": "Acme",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev B", "company": "Acme",
+            "description": MOCK_JOB_MARKETING,  # different description = different hash
+        })
+        resp = await self.client.get("/api/vetting")
+        companies = resp.json()["companies"]
+        acme = next((c for c in companies if c["company"] == "Acme"), None)
+        self.assertIsNotNone(acme)
+        self.assertEqual(len(acme["jobs"]), 2)
+
+    async def test_vetting_groups_recruiter_by_email(self):
+        """Jobs with same recruiter email should be grouped together."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Acme", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+        await self.client.post(f"/api/jobs/{jid}/application", data={
+            "status": "applied",
+            "recruiter_name": "Jane Doe",
+            "recruiter_email": "jane@acme.com",
+            "recruiter_phone": "", "notes": "",
+        })
+        resp2 = await self.client.get("/api/vetting")
+        recruiters = resp2.json()["recruiters"]
+        jane = next((r for r in recruiters if r["email"] == "jane@acme.com"), None)
+        self.assertIsNotNone(jane)
+        self.assertEqual(len(jane["jobs"]), 1)
+        # scraped_at should be present in recruiter jobs for date display
+        self.assertIn("scraped_at", jane["jobs"][0])
+
+    async def test_vetting_empty_db_returns_empty_lists(self):
+        """Empty DB should return empty companies and recruiters lists."""
+        resp = await self.client.get("/api/vetting")
+        data = resp.json()
+        self.assertEqual(data["companies"], [])
+        self.assertEqual(data["recruiters"], [])
+
+    async def test_vetting_page_renders(self):
+        """GET /vetting should return HTML."""
+        resp = await self.client.get("/vetting")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("content-type", ""))

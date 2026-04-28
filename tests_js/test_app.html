@@ -51,6 +51,12 @@
 <input id="paste-url"         type="text"   value="" style="display:none">
 <textarea id="paste-description"            style="display:none"></textarea>
 <button id="paste-submit-btn"               style="display:none">Add Job</button>
+<input id="vetting-search"    type="text"   value="" style="display:none">
+<select id="vetting-status"                          style="display:none"><option value=""></option><option value="applied">Applied</option><option value="not_applied">Not Applied</option><option value="interviewing">Interviewing</option></select>
+<input id="vetting-date-from" type="date"   value="" style="display:none">
+<input id="vetting-date-to"   type="date"   value="" style="display:none">
+<div id="vetting-companies"                          style="display:none"></div>
+<div id="vetting-recruiters"                         style="display:none"></div>
 <textarea id="html-input"                   style="display:none"></textarea>
 <span id="html-parse-status"                style="display:none"></span>
 <button id="html-parse-btn"                 style="display:none">Extract</button>
@@ -832,6 +838,153 @@ test("with email — shows replace btn",  () => {
 test("with email — shows delete btn",   () => {
   const email = {raw_html: '<p>Hello</p>', created_at: '2024-06-01 12:00:00'};
   assertContains(TMPL.emailTab(1, email), 'deleteEmail(1)');
+});
+
+
+section("vettingStatusBadge");
+
+test("renders status-badge class",      () => assertContains(vettingStatusBadge("applied"), "status-badge"));
+test("renders applied class",           () => assertContains(vettingStatusBadge("applied"), "status-applied"));
+test("renders Applied label",           () => assertContains(vettingStatusBadge("applied"), "Applied"));
+test("renders not_applied class",       () => assertContains(vettingStatusBadge("not_applied"), "status-not_applied"));
+test("null defaults to not_applied",    () => assertContains(vettingStatusBadge(null), "not_applied"));
+test("escapes HTML in status",          () => assertNotContains(vettingStatusBadge("<script>"), "<script>"));
+
+
+section("renderCompaniesView");
+
+const BASE_COMPANY = {
+  company: "Acme Corp",
+  jobs: [
+    { id: 1, title: "Go Developer", status: "applied",     scraped_at: "2024-06-15 10:00:00", recruiter_name: "Jane", recruiter_email: "jane@acme.com", recruiter_phone: "" },
+    { id: 2, title: "DevSecOps",    status: "not_applied", scraped_at: "2024-01-10 10:00:00", recruiter_name: "",     recruiter_email: "",              recruiter_phone: "" },
+  ]
+};
+
+test("empty array returns emptyPanel",  () => assertContains(renderCompaniesView([]), "empty"));
+test("renders company name",            () => assertContains(renderCompaniesView([BASE_COMPANY]), "Acme Corp"));
+test("renders job title link",          () => assertContains(renderCompaniesView([BASE_COMPANY]), "Go Developer"));
+test("renders job count",               () => assertContains(renderCompaniesView([BASE_COMPANY]), "2 jobs"));
+test("renders applied count",           () => assertContains(renderCompaniesView([BASE_COMPANY]), "1 applied"));
+test("renders status badge",            () => assertContains(renderCompaniesView([BASE_COMPANY]), "status-badge"));
+test("renders recruiter name",          () => assertContains(renderCompaniesView([BASE_COMPANY]), "Jane"));
+test("job links to /job/{id}",          () => assertContains(renderCompaniesView([BASE_COMPANY]), "/job/1"));
+test("escapes HTML in company name",    () => assertNotContains(renderCompaniesView([{company:"<b>X</b>", jobs:[]}]), "<b>"));
+test("escapes HTML in job title",       () => assertNotContains(renderCompaniesView([{company:"Co", jobs:[{id:1,title:"<b>bad</b>",status:"not_applied",recruiter_name:"",recruiter_email:"",recruiter_phone:""}]}]), "<b>"));
+test("single job shows singular",       () => { const c = {...BASE_COMPANY, jobs:[BASE_COMPANY.jobs[0]]}; assertContains(renderCompaniesView([c]), "1 job"); });
+test("renders date tag for job",        () => assertContains(renderCompaniesView([BASE_COMPANY]), "date-tag"));
+test("renders formatted date",          () => assertContains(renderCompaniesView([BASE_COMPANY]), "added"));
+test("no date tag when scraped_at null",() => { const c = {...BASE_COMPANY, jobs:[{...BASE_COMPANY.jobs[0], scraped_at:null}]}; assertNotContains(renderCompaniesView([c]), "added"); });
+
+
+section("renderRecruitersView");
+
+const BASE_RECRUITER = {
+  name:      "Jane Doe",
+  email:     "jane@acme.com",
+  phone:     "555-1234",
+  companies: ["Acme Corp", "Beta Inc"],
+  jobs:      [
+    { id: 1, title: "Go Developer", company: "Acme Corp", status: "applied",     scraped_at: "2024-06-15 10:00:00" },
+    { id: 2, title: "DevSecOps",    company: "Beta Inc",  status: "not_applied", scraped_at: "2024-01-10 10:00:00" },
+  ]
+};
+
+test("empty array returns emptyPanel",  () => assertContains(renderRecruitersView([]), "empty"));
+test("renders recruiter name",          () => assertContains(renderRecruitersView([BASE_RECRUITER]), "Jane Doe"));
+test("renders email",                   () => assertContains(renderRecruitersView([BASE_RECRUITER]), "jane@acme.com"));
+test("renders phone",                   () => assertContains(renderRecruitersView([BASE_RECRUITER]), "555-1234"));
+test("renders company tags",            () => assertContains(renderRecruitersView([BASE_RECRUITER]), "Acme Corp"));
+test("renders job title link",          () => assertContains(renderRecruitersView([BASE_RECRUITER]), "Go Developer"));
+test("job links to /job/{id}",          () => assertContains(renderRecruitersView([BASE_RECRUITER]), "/job/1"));
+test("renders job count",               () => assertContains(renderRecruitersView([BASE_RECRUITER]), "2 jobs"));
+test("renders status badge",            () => assertContains(renderRecruitersView([BASE_RECRUITER]), "status-badge"));
+test("no name shows Unknown Name",      () => assertContains(renderRecruitersView([{...BASE_RECRUITER, name:""}]), "Unknown Name"));
+test("escapes HTML in name",            () => assertNotContains(renderRecruitersView([{...BASE_RECRUITER, name:"<b>X</b>"}]), "<b>"));
+test("escapes HTML in email",           () => assertNotContains(renderRecruitersView([{...BASE_RECRUITER, email:"<b>x</b>@x.com"}]), "<b>"));
+test("renders date tag for job",        () => assertContains(renderRecruitersView([BASE_RECRUITER]), "date-tag"));
+test("renders formatted date",          () => assertContains(renderRecruitersView([BASE_RECRUITER]), "added"));
+test("no date tag when scraped_at null",() => { const r = {...BASE_RECRUITER, jobs:[{...BASE_RECRUITER.jobs[0], scraped_at:null}]}; assertNotContains(renderRecruitersView([r]), "added"); });
+
+
+section("paginateItems");
+
+test("returns all items when under limit",   () => { const r = paginateItems([1,2,3], 1); assertEqual(r.items.length, 3); assertEqual(r.totalPages, 1); });
+test("paginates correctly on page 1",        () => { const items = Array.from({length:30}, (_,i) => i); const r = paginateItems(items, 1); assertEqual(r.items.length, 25); assertEqual(r.page, 1); });
+test("paginates correctly on page 2",        () => { const items = Array.from({length:30}, (_,i) => i); const r = paginateItems(items, 2); assertEqual(r.items.length, 5); assertEqual(r.page, 2); });
+test("clamps page below 1 to 1",             () => { const r = paginateItems([1,2,3], 0); assertEqual(r.page, 1); });
+test("clamps page above max to max",         () => { const r = paginateItems([1,2,3], 99); assertEqual(r.page, r.totalPages); });
+test("empty array returns totalPages 1",     () => { const r = paginateItems([], 1); assertEqual(r.totalPages, 1); assertEqual(r.items.length, 0); });
+test("returns total count",                  () => { const r = paginateItems([1,2,3], 1); assertEqual(r.total, 3); });
+
+
+section("vettingPaginationBar");
+
+test("returns empty when single page",       () => assertContains(vettingPaginationBar(1, 1, 5, 'companies'), 'vetting-per-page')); // single page still shows per-page dropdown
+test("returns bar when multiple pages",      () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'pagination-bar'));
+test("prev disabled on page 1",             () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'disabled'));
+test("next disabled on last page",          () => assertContains(vettingPaginationBar(3, 3, 75, 'companies'), 'disabled'));
+test("shows page range info",               () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'Showing 1'));
+test("changeVettingPage companies kind",    () => { _vettingPageCompany = 1; assertContains(vettingPaginationBar(2, 3, 75, 'companies'), 'Page 2 of 3'); });
+test("shows per-page dropdown on companies", () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'vetting-per-page'));
+test("no per-page dropdown on recruiters",   () => assertNotContains(vettingPaginationBar(1, 3, 75, 'recruiters'), 'vetting-per-page'));
+test("shows All option in dropdown",         () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'All'));
+test("single page still shows dropdown",     () => assertContains(vettingPaginationBar(1, 1, 5, 'companies'), 'vetting-per-page'));
+test("zero total returns empty",             () => assertEqual(vettingPaginationBar(1, 1, 0, 'companies'), ''));
+
+
+section("applyVettingFilters");
+
+const VETTING_DATA = {
+  companies: [
+    { company: "Acme Corp", jobs: [
+      { id:1, title:"Go Developer",  status:"applied",      scraped_at:"2024-06-15 10:00:00", recruiter_name:"Jane", recruiter_email:"jane@acme.com", recruiter_phone:"" },
+      { id:2, title:"DevSecOps Eng", status:"not_applied",  scraped_at:"2024-01-10 10:00:00", recruiter_name:"",     recruiter_email:"",              recruiter_phone:"" },
+    ]},
+    { company: "Beta Inc", jobs: [
+      { id:3, title:"Python Dev",    status:"interviewing", scraped_at:"2024-06-20 10:00:00", recruiter_name:"Bob",  recruiter_email:"bob@beta.com",  recruiter_phone:"" },
+    ]},
+  ],
+  recruiters: [
+    { name:"Jane Doe", email:"jane@acme.com", phone:"", companies:["Acme Corp"], jobs:[
+      { id:1, title:"Go Developer", company:"Acme Corp", status:"applied" },
+    ]},
+    { name:"Bob Smith", email:"bob@beta.com", phone:"", companies:["Beta Inc"], jobs:[
+      { id:3, title:"Python Dev",  company:"Beta Inc",  status:"interviewing" },
+    ]},
+  ],
+};
+
+function setupVettingFilters(search, status, dateFrom, dateTo) {
+  _vettingData = VETTING_DATA;
+  const s = document.getElementById('vetting-search');
+  const st = document.getElementById('vetting-status');
+  const df = document.getElementById('vetting-date-from');
+  const dt = document.getElementById('vetting-date-to');
+  if (s)  s.value  = search   || '';
+  if (st) st.value = status   || '';
+  if (df) df.value = dateFrom || '';
+  if (dt) dt.value = dateTo   || '';
+  applyVettingFilters();
+}
+
+test("no filters — shows all companies",    () => { setupVettingFilters(); assertContains(document.getElementById('vetting-companies').innerHTML, "Acme Corp"); });
+test("no filters — shows all recruiters",   () => { setupVettingFilters(); assertContains(document.getElementById('vetting-recruiters').innerHTML, "Jane Doe"); });
+test("search by company name",              () => { setupVettingFilters("acme"); assertContains(document.getElementById('vetting-companies').innerHTML, "Acme Corp"); assertNotContains(document.getElementById('vetting-companies').innerHTML, "Beta Inc"); });
+test("search by job title",                 () => { setupVettingFilters("python"); assertContains(document.getElementById('vetting-companies').innerHTML, "Python Dev"); assertNotContains(document.getElementById('vetting-companies').innerHTML, "Go Developer"); });
+test("search by recruiter name",            () => { setupVettingFilters("jane"); assertContains(document.getElementById('vetting-recruiters').innerHTML, "Jane Doe"); assertNotContains(document.getElementById('vetting-recruiters').innerHTML, "Bob Smith"); });
+test("search by recruiter email",           () => { setupVettingFilters("bob@beta"); assertContains(document.getElementById('vetting-recruiters').innerHTML, "bob@beta.com"); });
+test("status filter applied",               () => { setupVettingFilters("", "applied"); assertContains(document.getElementById('vetting-companies').innerHTML, "Go Developer"); assertNotContains(document.getElementById('vetting-companies').innerHTML, "DevSecOps"); });
+test("date from filter excludes old jobs",  () => { setupVettingFilters("", "", "2024-06-01", ""); assertNotContains(document.getElementById('vetting-companies').innerHTML, "DevSecOps"); });
+test("date to filter excludes new jobs",    () => { setupVettingFilters("", "", "", "2024-06-16"); assertNotContains(document.getElementById('vetting-companies').innerHTML, "Python Dev"); });
+test("no match shows empty panel",          () => { setupVettingFilters("zzznomatch"); assertContains(document.getElementById('vetting-companies').innerHTML, "empty"); });
+test("clearVettingFilters resets all",      () => {
+  setupVettingFilters("acme", "applied", "2024-01-01", "2024-12-31");
+  clearVettingFilters();
+  assertEqual(document.getElementById('vetting-search').value,    '');
+  assertEqual(document.getElementById('vetting-status').value,    '');
+  assertEqual(document.getElementById('vetting-date-from').value, '');
+  assertEqual(document.getElementById('vetting-date-to').value,   '');
 });
 
 

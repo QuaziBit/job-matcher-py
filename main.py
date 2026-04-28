@@ -5,7 +5,7 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
@@ -45,6 +45,87 @@ async def index():
 @app.get("/job/{job_id}", response_class=HTMLResponse)
 async def job_detail(job_id: int):
     return HTMLResponse(open(os.path.join(_UI_DIR, "job_detail.html"), encoding="utf-8").read())
+
+
+# ── Vetting page ─────────────────────────────────────────────────────────────
+
+@app.get("/vetting", response_class=HTMLResponse)
+async def vetting_page():
+    return HTMLResponse(open(os.path.join(_UI_DIR, "vetting.html"), encoding="utf-8").read())
+
+
+@app.get("/api/vetting")
+async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
+    """Return all jobs grouped by company and by recruiter for the vetting page."""
+    try:
+        async with db.execute("""
+            SELECT
+                j.id, j.title, j.company, j.url, j.scraped_at,
+                a.status, a.recruiter_name, a.recruiter_email, a.recruiter_phone
+            FROM jobs j
+            LEFT JOIN applications a ON a.job_id = j.id
+            ORDER BY j.company COLLATE NOCASE, j.scraped_at DESC
+        """) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    except Exception as e:
+        logger.error(f"\u2717 get_vetting_data DB error: {e}")
+        return JSONResponse({"error": "Database error"}, status_code=500)
+
+    # Group by company
+    companies = {}
+    for r in rows:
+        company = (r.get("company") or "Unknown Company").strip() or "Unknown Company"
+        if company not in companies:
+            companies[company] = {"company": company, "jobs": []}
+        companies[company]["jobs"].append({
+            "id":              r["id"],
+            "title":           r["title"] or "Untitled",
+            "url":             r["url"] or "",
+            "scraped_at":      r["scraped_at"] or "",
+            "status":          r["status"] or "not_applied",
+            "recruiter_name":  r["recruiter_name"] or "",
+            "recruiter_email": r["recruiter_email"] or "",
+            "recruiter_phone": r["recruiter_phone"] or "",
+        })
+
+    # Group by recruiter
+    recruiters = {}
+    for r in rows:
+        name  = (r.get("recruiter_name")  or "").strip()
+        email = (r.get("recruiter_email") or "").strip()
+        key   = email or name or None
+        if not key:
+            continue
+        if key not in recruiters:
+            recruiters[key] = {
+                "name":      name,
+                "email":     email,
+                "phone":     (r.get("recruiter_phone") or "").strip(),
+                "companies": set(),
+                "jobs":      [],
+            }
+        recruiters[key]["companies"].add(
+            (r.get("company") or "Unknown Company").strip() or "Unknown Company"
+        )
+        recruiters[key]["jobs"].append({
+            "id":         r["id"],
+            "title":      r["title"] or "Untitled",
+            "company":    (r.get("company") or "Unknown Company").strip(),
+            "status":     r["status"] or "not_applied",
+            "scraped_at": r["scraped_at"] or "",
+        })
+
+    # Convert sets to lists for JSON serialization
+    recruiters_list = []
+    for v in recruiters.values():
+        v["companies"] = sorted(v["companies"])
+        recruiters_list.append(v)
+    recruiters_list.sort(key=lambda r: (r["name"] or r["email"]).lower())
+
+    return JSONResponse({
+        "companies":  list(companies.values()),
+        "recruiters": recruiters_list,
+    })
 
 
 @app.get("/resumes", response_class=HTMLResponse)
