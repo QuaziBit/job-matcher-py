@@ -38,6 +38,15 @@
   <button id="prev-btn"></button>
   <button id="next-btn"></button>
 </div>
+<select id="per-page" style="display:none">
+  <option value="5">5</option>
+  <option value="10">10</option>
+  <option value="25" selected>25</option>
+  <option value="50">50</option>
+  <option value="0">All</option>
+</select>
+<button id="clear-btn" style="display:none">Clear</button>
+<button id="vetting-clear-btn" style="display:none">Clear</button>
 <div id="analysis-progress">
   <span id="progress-label"></span>
   <div  id="progress-fill"></div>
@@ -698,6 +707,58 @@ test("clears all filter inputs", () => {
   assertEqual(document.getElementById("filter-score").value,    "");
   assertEqual(document.getElementById("filter-provider").value, "");
 });
+test("clearFilters resets page to 1",     () => { _currentPage = 3; const orig = window.fetch; window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})}); clearFilters(); window.fetch = orig; assertEqual(_currentPage, 1); });
+test("clearFilters resets perPage to 25", () => { _perPage = 10; const orig = window.fetch; window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})}); clearFilters(); window.fetch = orig; assertEqual(_perPage, 25); });
+test("clearFilters resets per-page select", () => {
+  const sel = document.getElementById('per-page');
+  if (sel) {
+    sel.value = '10';
+    const orig = window.fetch;
+    window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})});
+    clearFilters();
+    window.fetch = orig;
+    assertEqual(sel.value, '25');
+  } else { assert(true); } // per-page not on this page
+});
+
+
+section("Clear button visibility");
+
+test("hidden when no filters and page 1",   () => {
+  _currentPage = 1; _perPage = 25;
+  ['filter-search','filter-status','filter-score','filter-provider','filter-date','filter-date-from','filter-date-to'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  const btn = document.getElementById('clear-btn');
+  const orig = window.fetch;
+  window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})});
+  fetchJobs();
+  window.fetch = orig;
+  if (btn) assertEqual(btn.style.display, 'none');
+  else assert(true);
+});
+test("visible when page > 1",               () => {
+  _currentPage = 2; _perPage = 25;
+  ['filter-search','filter-status','filter-score','filter-provider','filter-date','filter-date-from','filter-date-to'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  const btn = document.getElementById('clear-btn');
+  const orig = window.fetch;
+  window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})});
+  fetchJobs();
+  window.fetch = orig;
+  _currentPage = 1;
+  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  else assert(true);
+});
+test("visible when perPage not default",    () => {
+  _currentPage = 1; _perPage = 10;
+  ['filter-search','filter-status','filter-score','filter-provider','filter-date','filter-date-from','filter-date-to'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  const btn = document.getElementById('clear-btn');
+  const orig = window.fetch;
+  window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})});
+  fetchJobs();
+  window.fetch = orig;
+  _perPage = 25;
+  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  else assert(true);
+});
 
 
 section("guessJobFields");
@@ -933,6 +994,11 @@ test("single page still shows dropdown",     () => assertContains(vettingPaginat
 test("zero total returns empty",             () => assertEqual(vettingPaginationBar(1, 1, 0, 'companies'), ''));
 
 
+
+
+
+
+
 section("applyVettingFilters");
 
 const VETTING_DATA = {
@@ -985,6 +1051,94 @@ test("clearVettingFilters resets all",      () => {
   assertEqual(document.getElementById('vetting-status').value,    '');
   assertEqual(document.getElementById('vetting-date-from').value, '');
   assertEqual(document.getElementById('vetting-date-to').value,   '');
+});
+
+
+section("vetting Clear button visibility");
+
+test("hidden when no filters and defaults",  () => {
+  _vettingPageCompany = 1; _vettingPageRecruit = 1; _vettingPerPage = 25;
+  setupVettingFilters('', '', '', '');
+  const btn = document.getElementById('vetting-clear-btn');
+  if (btn) assertEqual(btn.style.display, 'none');
+  else assert(true);
+});
+test("visible when search set",              () => {
+  setupVettingFilters('acme', '', '', '');
+  const btn = document.getElementById('vetting-clear-btn');
+  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  else assert(true);
+});
+test("visible when status set",              () => {
+  setupVettingFilters('', 'applied', '', '');
+  const btn = document.getElementById('vetting-clear-btn');
+  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  else assert(true);
+});
+test("visible when page_c > 1",              () => {
+  _vettingData = { companies: Array.from({length:60},(_,i)=>({company:`Co${i}`,jobs:[{id:i,title:`J${i}`,status:'applied',scraped_at:'2024-06-15 10:00:00',recruiter_name:'',recruiter_email:'',recruiter_phone:''}]})), recruiters: [] };
+  _vettingPageCompany = 2; _vettingPageRecruit = 1; _vettingPerPage = 25;
+  applyVettingFilters();
+  const btn = document.getElementById('vetting-clear-btn');
+  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  else assert(true);
+  _vettingData = VETTING_DATA; _vettingPageCompany = 1;
+});
+test("visible when perPage not 25",          () => {
+  _vettingPerPage = 10; _vettingPageCompany = 1; _vettingPageRecruit = 1;
+  setupVettingFilters('', '', '', '');
+  const btn = document.getElementById('vetting-clear-btn');
+  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  else assert(true);
+  _vettingPerPage = 25;
+});
+test("clearVettingFilters hides button",     () => {
+  setupVettingFilters('acme', '', '', '');
+  clearVettingFilters();
+  const btn = document.getElementById('vetting-clear-btn');
+  if (btn) assertEqual(btn.style.display, 'none');
+  else assert(true);
+});
+
+section("vetting URL state");
+
+test("applyVettingFilters updates URL",        () => {
+  setupVettingFilters('acme', 'applied', '', '');
+  assertContains(window.location.search, 'search=acme');
+});
+test("URL contains status filter",             () => {
+  setupVettingFilters('', 'applied', '', '');
+  assertContains(window.location.search, 'status=applied');
+});
+test("URL contains per_page",                  () => {
+  _vettingPerPage = 10;
+  setupVettingFilters('', '', '', '');
+  assertContains(window.location.search, 'per_page=10');
+  _vettingPerPage = 25; // reset
+});
+test("URL contains page_c and page_r",         () => {
+  // Use a large dataset so pagination doesn't reset pages to 1
+  const bigData = {
+    companies: Array.from({length:60}, (_, i) => ({company:`Co${i}`, jobs:[{id:i,title:`Job${i}`,status:'applied',scraped_at:'2024-06-15 10:00:00',recruiter_name:'',recruiter_email:'',recruiter_phone:''}]})),
+    recruiters: Array.from({length:60}, (_, i) => ({name:`R${i}`,email:`r${i}@x.com`,phone:'',companies:[`Co${i}`],jobs:[{id:i,title:`Job${i}`,company:`Co${i}`,status:'applied',scraped_at:'2024-06-15 10:00:00'}]})),
+  };
+  _vettingData = bigData;
+  _vettingPageCompany = 2;
+  _vettingPageRecruit = 3;
+  applyVettingFilters();
+  assertContains(window.location.search, 'page_c=2');
+  assertContains(window.location.search, 'page_r=3');
+  _vettingData = VETTING_DATA;
+  _vettingPageCompany = 1;
+  _vettingPageRecruit = 1;
+});
+test("URL contains date_from filter",          () => {
+  setupVettingFilters('', '', '2024-01-01', '');
+  assertContains(window.location.search, 'date_from=2024-01-01');
+});
+test("URL contains date_to filter",            () => {
+  setupVettingFilters('', '', '', '2024-12-31');
+  assertContains(window.location.search, 'date_to=2024-12-31');
 });
 
 
