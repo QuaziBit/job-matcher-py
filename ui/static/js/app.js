@@ -1103,8 +1103,8 @@ async function fetchJobs() {
 
   const clearBtn = document.getElementById('clear-btn');
   if (clearBtn) clearBtn.style.display =
-    (search || status || score || provider || addedDays || dateFrom || dateTo ||
-     _currentPage > 1 || _perPage !== 25) ? 'inline-flex' : 'none';
+    (search || status || score || provider || addedDays || dateFrom || dateTo)
+    ? 'inline-flex' : 'none';
 
   log('fetchJobs', `page=${_currentPage} per_page=${_perPage} search=${search} status=${status} score=${score} provider=${provider}`);
   showLoading(true);
@@ -1275,12 +1275,7 @@ function clearFilters() {
    'filter-date','filter-date-from','filter-date-to'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
-  // Also reset pagination to defaults
-  _currentPage = 1;
-  _perPage     = 25;
-  const perPageEl = document.getElementById('per-page');
-  if (perPageEl) perPageEl.value = '25';
-  applyFilters();
+  fetchJobs();
 }
 
 
@@ -2336,6 +2331,10 @@ let _vettingPageCompany  = 1;
 let _vettingPageRecruit  = 1;
 let _vettingPerPage      = 25;
 let _vettingInitialPush  = false; // track if initial pushState done
+let _vettingLastSearch   = '';
+let _vettingLastStatus   = '';
+let _vettingLastDateFrom = '';
+let _vettingLastDateTo   = '';
 
 function paginateItems(items, page) {
   const total      = items.length;
@@ -2352,14 +2351,15 @@ function vettingPaginationBar(page, totalPages, total, kind) {
   const effPP   = _vettingPerPage === 0 ? total : _vettingPerPage;
   const start   = ((page - 1) * effPP) + 1;
   const end     = Math.min(page * effPP, total);
-  const perPageSel = kind === 'companies' ? `
-    <select id="vetting-per-page" class="pagination-perpage" onchange="changeVettingPerPage()">
+  const selId = kind === 'companies' ? 'vetting-per-page-c' : 'vetting-per-page-r';
+  const perPageSel = `
+    <select id="${selId}" class="pagination-perpage" onchange="changeVettingPerPage(this.value)">
       <option value="5"   ${_vettingPerPage===5  ? 'selected' : ''}>5 per page</option>
       <option value="10"  ${_vettingPerPage===10 ? 'selected' : ''}>10 per page</option>
       <option value="25"  ${_vettingPerPage===25 ? 'selected' : ''}>25 per page</option>
       <option value="50"  ${_vettingPerPage===50 ? 'selected' : ''}>50 per page</option>
       <option value="0"   ${_vettingPerPage===0  ? 'selected' : ''}>All</option>
-    </select>` : '';
+    </select>`;
   if (totalPages <= 1 && _vettingPerPage !== 0) {
     return perPageSel ? `<div class="pagination-bar" style="margin-top:14px;justify-content:flex-end;">${perPageSel}</div>` : '';
   }
@@ -2439,10 +2439,17 @@ function applyVettingFilters() {
     return { ...r, jobs, companies: cos };
   }).filter(Boolean);
 
-  // Reset to page 1 when filters change
-  if (search || status || dateFrom || dateTo) {
-    _vettingPageCompany = 1;
-    _vettingPageRecruit = 1;
+  // Reset to page 1 only when filter values actually changed
+  if (search   !== _vettingLastSearch   ||
+      status   !== _vettingLastStatus   ||
+      dateFrom !== _vettingLastDateFrom ||
+      dateTo   !== _vettingLastDateTo) {
+    _vettingPageCompany  = 1;
+    _vettingPageRecruit  = 1;
+    _vettingLastSearch   = search;
+    _vettingLastStatus   = status;
+    _vettingLastDateFrom = dateFrom;
+    _vettingLastDateTo   = dateTo;
   }
 
   const pc = paginateItems(allCompanies, _vettingPageCompany);
@@ -2453,8 +2460,7 @@ function applyVettingFilters() {
   // Show/hide Clear button based on active filters or non-default pagination
   const vettingClearBtn = document.getElementById('vetting-clear-btn');
   if (vettingClearBtn) vettingClearBtn.style.display =
-    (search || status || dateFrom || dateTo ||
-     _vettingPageCompany > 1 || _vettingPageRecruit > 1 || _vettingPerPage !== 25)
+    (search || status || dateFrom || dateTo)
     ? 'inline-flex' : 'none';
 
   const compEl = document.getElementById('vetting-companies');
@@ -2484,14 +2490,17 @@ function clearVettingFilters() {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
-  _vettingPageCompany = 1;
-  _vettingPageRecruit = 1;
+  _vettingPageCompany  = 1;
+  _vettingPageRecruit  = 1;
+  _vettingLastSearch   = '';
+  _vettingLastStatus   = '';
+  _vettingLastDateFrom = '';
+  _vettingLastDateTo   = '';
   applyVettingFilters();
 }
 
-function changeVettingPerPage() {
-  const sel = document.getElementById('vetting-per-page');
-  if (sel) _vettingPerPage = parseInt(sel.value) || 25;
+function changeVettingPerPage(val) {
+  _vettingPerPage = parseInt(val) || 25;
   _vettingPageCompany = 1;
   _vettingPageRecruit = 1;
   applyVettingFilters();
@@ -2500,7 +2509,11 @@ function changeVettingPerPage() {
 async function initVettingPage() {
   const main = document.getElementById('vetting-main');
   if (!main) return;
-  _vettingInitialPush = false; // reset so first applyVettingFilters does pushState
+  _vettingInitialPush  = false; // reset so first applyVettingFilters does pushState
+  _vettingLastSearch   = '';
+  _vettingLastStatus   = '';
+  _vettingLastDateFrom = '';
+  _vettingLastDateTo   = '';
 
   main.innerHTML = `
     <div class="page-header">

@@ -707,19 +707,8 @@ test("clears all filter inputs", () => {
   assertEqual(document.getElementById("filter-score").value,    "");
   assertEqual(document.getElementById("filter-provider").value, "");
 });
-test("clearFilters resets page to 1",     () => { _currentPage = 3; const orig = window.fetch; window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})}); clearFilters(); window.fetch = orig; assertEqual(_currentPage, 1); });
-test("clearFilters resets perPage to 25", () => { _perPage = 10; const orig = window.fetch; window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})}); clearFilters(); window.fetch = orig; assertEqual(_perPage, 25); });
-test("clearFilters resets per-page select", () => {
-  const sel = document.getElementById('per-page');
-  if (sel) {
-    sel.value = '10';
-    const orig = window.fetch;
-    window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})});
-    clearFilters();
-    window.fetch = orig;
-    assertEqual(sel.value, '25');
-  } else { assert(true); } // per-page not on this page
-});
+test("clearFilters does not reset page",     () => { _currentPage = 3; const orig = window.fetch; window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})}); clearFilters(); window.fetch = orig; assertEqual(_currentPage, 3); _currentPage = 1; });
+test("clearFilters does not reset perPage", () => { _perPage = 10; const orig = window.fetch; window.fetch = () => Promise.resolve({ok:true,json:()=>Promise.resolve({total:0,jobs:[],total_pages:1,page:1,per_page:25})}); clearFilters(); window.fetch = orig; assertEqual(_perPage, 10); _perPage = 25; });
 
 
 section("Clear button visibility");
@@ -735,7 +724,7 @@ test("hidden when no filters and page 1",   () => {
   if (btn) assertEqual(btn.style.display, 'none');
   else assert(true);
 });
-test("visible when page > 1",               () => {
+test("hidden when page > 1 and no filters",  () => {
   _currentPage = 2; _perPage = 25;
   ['filter-search','filter-status','filter-score','filter-provider','filter-date','filter-date-from','filter-date-to'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
   const btn = document.getElementById('clear-btn');
@@ -744,10 +733,10 @@ test("visible when page > 1",               () => {
   fetchJobs();
   window.fetch = orig;
   _currentPage = 1;
-  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  if (btn) assertEqual(btn.style.display, 'none');
   else assert(true);
 });
-test("visible when perPage not default",    () => {
+test("hidden when perPage changed, no filters", () => {
   _currentPage = 1; _perPage = 10;
   ['filter-search','filter-status','filter-score','filter-provider','filter-date','filter-date-from','filter-date-to'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
   const btn = document.getElementById('clear-btn');
@@ -756,7 +745,7 @@ test("visible when perPage not default",    () => {
   fetchJobs();
   window.fetch = orig;
   _perPage = 25;
-  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  if (btn) assertEqual(btn.style.display, 'none');
   else assert(true);
 });
 
@@ -981,16 +970,16 @@ test("returns total count",                  () => { const r = paginateItems([1,
 
 section("vettingPaginationBar");
 
-test("returns empty when single page",       () => assertContains(vettingPaginationBar(1, 1, 5, 'companies'), 'vetting-per-page')); // single page still shows per-page dropdown
+test("returns empty when single page",       () => assertContains(vettingPaginationBar(1, 1, 5, 'companies'), 'vetting-per-page-c')); // single page still shows per-page dropdown
 test("returns bar when multiple pages",      () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'pagination-bar'));
 test("prev disabled on page 1",             () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'disabled'));
 test("next disabled on last page",          () => assertContains(vettingPaginationBar(3, 3, 75, 'companies'), 'disabled'));
 test("shows page range info",               () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'Showing 1'));
 test("changeVettingPage companies kind",    () => { _vettingPageCompany = 1; assertContains(vettingPaginationBar(2, 3, 75, 'companies'), 'Page 2 of 3'); });
-test("shows per-page dropdown on companies", () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'vetting-per-page'));
-test("no per-page dropdown on recruiters",   () => assertNotContains(vettingPaginationBar(1, 3, 75, 'recruiters'), 'vetting-per-page'));
+test("shows per-page dropdown on companies", () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'vetting-per-page-c'));
+test("shows per-page dropdown on recruiters", () => assertContains(vettingPaginationBar(1, 3, 75, 'recruiters'), 'vetting-per-page-r'));
 test("shows All option in dropdown",         () => assertContains(vettingPaginationBar(1, 3, 75, 'companies'), 'All'));
-test("single page still shows dropdown",     () => assertContains(vettingPaginationBar(1, 1, 5, 'companies'), 'vetting-per-page'));
+test("single page still shows dropdown",     () => assertContains(vettingPaginationBar(1, 1, 5, 'companies'), 'vetting-per-page-c'));
 test("zero total returns empty",             () => assertEqual(vettingPaginationBar(1, 1, 0, 'companies'), ''));
 
 
@@ -1075,20 +1064,23 @@ test("visible when status set",              () => {
   if (btn) assertEqual(btn.style.display, 'inline-flex');
   else assert(true);
 });
-test("visible when page_c > 1",              () => {
+test("hidden when page_c > 1, no filters",   () => {
+  // Clear any leftover filter state from previous tests
+  ['vetting-search','vetting-status','vetting-date-from','vetting-date-to'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  _vettingLastSearch=''; _vettingLastStatus=''; _vettingLastDateFrom=''; _vettingLastDateTo='';
   _vettingData = { companies: Array.from({length:60},(_,i)=>({company:`Co${i}`,jobs:[{id:i,title:`J${i}`,status:'applied',scraped_at:'2024-06-15 10:00:00',recruiter_name:'',recruiter_email:'',recruiter_phone:''}]})), recruiters: [] };
   _vettingPageCompany = 2; _vettingPageRecruit = 1; _vettingPerPage = 25;
   applyVettingFilters();
   const btn = document.getElementById('vetting-clear-btn');
-  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  if (btn) assertEqual(btn.style.display, 'none');
   else assert(true);
   _vettingData = VETTING_DATA; _vettingPageCompany = 1;
 });
-test("visible when perPage not 25",          () => {
+test("hidden when perPage changed, no filters", () => {
   _vettingPerPage = 10; _vettingPageCompany = 1; _vettingPageRecruit = 1;
   setupVettingFilters('', '', '', '');
   const btn = document.getElementById('vetting-clear-btn');
-  if (btn) assertEqual(btn.style.display, 'inline-flex');
+  if (btn) assertEqual(btn.style.display, 'none');
   else assert(true);
   _vettingPerPage = 25;
 });
