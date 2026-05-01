@@ -912,6 +912,50 @@ async function saveJobUrl(jobId, url) {
 }
 
 
+// ── Edit / save job title, company, location ──────────────────────────────────
+
+function toggleFieldEdit(field) {
+  const row = document.getElementById(`field-edit-row-${field}`);
+  if (!row) return;
+  const visible = row.style.display === 'flex';
+  // Close all field edit rows first
+  ['title', 'company', 'location'].forEach(f => {
+    const r = document.getElementById(`field-edit-row-${f}`);
+    if (r) r.style.display = 'none';
+  });
+  if (!visible) {
+    row.style.display = 'flex';
+    const input = document.getElementById(`field-edit-input-${field}`);
+    if (input) { input.focus(); input.select(); }
+  }
+}
+
+async function saveJobField(jobId, field, value) {
+  log('saveJobField', `jobId=${jobId} field=${field} value="${value}"`);
+  if (field === 'title' && !value.trim()) {
+    toast('Title cannot be empty', 'error');
+    return;
+  }
+  const fd = new FormData();
+  fd.append(field, value);
+  try {
+    const res  = await fetch(`/api/jobs/${jobId}/${field}`, { method: 'PATCH', body: fd });
+    const data = await res.json();
+    log('saveJobField', `response status=${res.status}`, data);
+    if (!res.ok) {
+      logErr('saveJobField', `server error ${res.status}:`, data.error);
+      toast(data.error || `Failed to update ${field}`, 'error');
+      return;
+    }
+    toast(`✓ ${field.charAt(0).toUpperCase() + field.slice(1)} updated`, 'success');
+    refreshJobDetailPage();
+  } catch(err) {
+    logErr('saveJobField', 'fetch threw:', err);
+    toast('Network error', 'error');
+  }
+}
+
+
 // ── Delete resume ─────────────────────────────────────────────────────────────
 async function deleteResume(resumeId) {
   if (!confirm('Delete this resume version?')) return;
@@ -1663,20 +1707,43 @@ const TMPL = {
   // Page header: title, status badge, company/location, URL, salary
   pageHeader(job, statusClass, statusLabel, urlHtml, salaryHtml) {
     const currentUrl = (!job.url || job.url.startsWith('manual://')) ? '' : job.url;
+    const editBtn = (field, label) =>
+      `<button class="btn btn-ghost btn-xs" style="margin-left:4px;padding:1px 6px;font-size:11px;"
+               onclick="toggleFieldEdit('${field}')" title="Edit ${label}">&#9998;</button>`;
+    const fieldRow = (field, val, placeholder) => `
+      <div id="field-edit-row-${field}" style="display:none; margin-top:6px;">
+        <div class="flex gap-10 items-center" style="max-width:600px;">
+          <input id="field-edit-input-${field}" type="text" value="${escHtml(val)}"
+                 placeholder="${escHtml(placeholder)}" style="flex:1; font-size:12px;" />
+          <button class="btn btn-primary btn-sm"
+                  onclick="saveJobField(${job.id}, '${field}', document.getElementById('field-edit-input-${field}').value)">Save</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleFieldEdit('${field}')">Cancel</button>
+        </div>
+      </div>`;
     return `
       <div style="margin-bottom: 20px;">
         <a href="${getBackUrl()}" class="btn btn-ghost btn-sm">\u2190 Back</a>
       </div>
       <div class="page-header">
         <div class="flex items-center gap-10" style="margin-bottom: 8px;">
-          <h2 style="flex:1; min-width:0;">${escHtml(job.title || 'Untitled Job')}</h2>
+          <h2 style="flex:1; min-width:0;">
+            ${escHtml(job.title || 'Untitled Job')}${editBtn('title', 'title')}
+          </h2>
           <span id="status-badge" class="status-badge status-${escHtml(statusClass)}">${escHtml(statusLabel)}</span>
           <button class="btn btn-danger btn-sm" onclick="deleteJob(${job.id})">Delete</button>
         </div>
+        ${fieldRow('title', job.title || '', 'Job title')}
         <div class="flex gap-10 text-dim text-mono text-xs">
-          ${TMPL.jobMeta(job.company, job.location)}
+          ${job.company
+            ? `<span>${escHtml(job.company)}${editBtn('company', 'company')}</span>`
+            : `<span class="text-mute">(no company)${editBtn('company', 'company')}</span>`}
+          ${job.location
+            ? `<span>\u00b7 ${escHtml(job.location)}${editBtn('location', 'location')}</span>`
+            : `<span>\u00b7 <span class="text-mute">(no location)</span>${editBtn('location', 'location')}</span>`}
           ${urlHtml}
         </div>
+        ${fieldRow('company',  job.company  || '', 'Company name')}
+        ${fieldRow('location', job.location || '', 'City, State or Remote')}
         <div id="url-edit-row" style="display:none; margin-top:8px; display:none;">
           <div class="flex gap-10 items-center" style="max-width:600px;">
             <input id="url-edit-input" type="text" value="${escHtml(currentUrl)}"

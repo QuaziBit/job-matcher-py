@@ -1623,6 +1623,150 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(patch_resp.status_code, 404)
 
+    # ── PATCH /api/jobs/{id}/title ─────────────────────────────────────────
+
+    async def test_update_job_title_sets_title(self):
+        """PATCH /api/jobs/{id}/title should update the job title."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Old Title", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        patch_resp = await self.client.patch(f"/api/jobs/{jid}/title", data={
+            "title": "New Title"
+        })
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertTrue(patch_resp.json()["ok"])
+        self.assertEqual(patch_resp.json()["title"], "New Title")
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT title FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertEqual(row["title"], "New Title")
+
+    async def test_update_job_title_empty_returns_422(self):
+        """Empty title should return 422."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        patch_resp = await self.client.patch(f"/api/jobs/{jid}/title", data={"title": ""})
+        self.assertEqual(patch_resp.status_code, 422)
+        self.assertIn("empty", patch_resp.json()["error"].lower())
+
+    async def test_update_job_title_not_found_returns_404(self):
+        """Patching title on a non-existent job should return 404."""
+        patch_resp = await self.client.patch("/api/jobs/99999/title", data={"title": "X"})
+        self.assertEqual(patch_resp.status_code, 404)
+
+    async def test_update_job_title_reflected_in_detail_api(self):
+        """After PATCH, /api/jobs/{id}/detail should return the new title."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Original", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        await self.client.patch(f"/api/jobs/{jid}/title", data={"title": "Updated Title"})
+
+        detail = await self.client.get(f"/api/jobs/{jid}/detail")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["job"]["title"], "Updated Title")
+
+    # ── PATCH /api/jobs/{id}/company ───────────────────────────────────────
+
+    async def test_update_job_company_sets_company(self):
+        """PATCH /api/jobs/{id}/company should update the company name."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "OldCo", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        patch_resp = await self.client.patch(f"/api/jobs/{jid}/company", data={
+            "company": "NewCo"
+        })
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertTrue(patch_resp.json()["ok"])
+        self.assertEqual(patch_resp.json()["company"], "NewCo")
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT company FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertEqual(row["company"], "NewCo")
+
+    async def test_update_job_company_allows_empty(self):
+        """Empty company is valid — some postings have no company."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Acme", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        patch_resp = await self.client.patch(f"/api/jobs/{jid}/company", data={"company": ""})
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertEqual(patch_resp.json()["company"], "")
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT company FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertEqual(row["company"], "")
+
+    async def test_update_job_company_not_found_returns_404(self):
+        """Patching company on a non-existent job should return 404."""
+        patch_resp = await self.client.patch("/api/jobs/99999/company", data={"company": "X"})
+        self.assertEqual(patch_resp.status_code, 404)
+
+    # ── PATCH /api/jobs/{id}/location ──────────────────────────────────────
+
+    async def test_update_job_location_sets_location(self):
+        """PATCH /api/jobs/{id}/location should update the location."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        patch_resp = await self.client.patch(f"/api/jobs/{jid}/location", data={
+            "location": "Washington, DC"
+        })
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertTrue(patch_resp.json()["ok"])
+        self.assertEqual(patch_resp.json()["location"], "Washington, DC")
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT location FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertEqual(row["location"], "Washington, DC")
+
+    async def test_update_job_location_allows_empty(self):
+        """Empty location is valid."""
+        import aiosqlite
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "Co", "description": MOCK_JOB_DEVSECOPS,
+        })
+        jid = resp.json()["job_id"]
+
+        patch_resp = await self.client.patch(f"/api/jobs/{jid}/location", data={"location": ""})
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertEqual(patch_resp.json()["location"], "")
+
+        async with aiosqlite.connect(self.tmp.name) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT location FROM jobs WHERE id = ?", (jid,)) as cur:
+                row = await cur.fetchone()
+        self.assertEqual(row["location"], "")
+
+    async def test_update_job_location_not_found_returns_404(self):
+        """Patching location on a non-existent job should return 404."""
+        patch_resp = await self.client.patch("/api/jobs/99999/location", data={"location": "X"})
+        self.assertEqual(patch_resp.status_code, 404)
+
     async def test_add_manual_job_with_source_url(self):
         """Providing source_url should store it instead of manual:// URL."""
         import aiosqlite

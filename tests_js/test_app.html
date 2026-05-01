@@ -491,15 +491,89 @@ test("compareTab escapes HTML in label",       () => { const c = {...COMP, resum
 
 section("TMPL.pageHeader");
 
-test("renders page-header div",     () => assertContains(TMPL.pageHeader({id:1,title:"Dev"}, "not_applied","not applied","",""), "page-header"));
-test("renders job title",           () => assertContains(TMPL.pageHeader({id:1,title:"Sr Dev"}, "applied","applied","",""), "Sr Dev"));
-test("renders status badge",        () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "applied","applied","",""), "status-applied"));
-test("renders delete button",       () => assertContains(TMPL.pageHeader({id:5,title:"x"}, "not_applied","not applied","",""), "deleteJob(5)"));
-test("renders back link",           () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "not_applied","not applied","",""), "← Back"));
-test("injects urlHtml",             () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "not_applied","not applied","URL_HTML",""), "URL_HTML"));
-test("injects salaryHtml",          () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "not_applied","not applied","","SALARY_HTML"), "SALARY_HTML"));
-test("escapes title",               () => assertNotContains(TMPL.pageHeader({id:1,title:"<b>bad</b>"}, "not_applied","not applied","",""), "<b>"));
-test("untitled fallback",           () => assertContains(TMPL.pageHeader({id:1}, "not_applied","not applied","",""), "Untitled Job"));
+test("renders page-header div",              () => assertContains(TMPL.pageHeader({id:1,title:"Dev"}, "not_applied","not applied","",""), "page-header"));
+test("renders job title",                    () => assertContains(TMPL.pageHeader({id:1,title:"Sr Dev"}, "applied","applied","",""), "Sr Dev"));
+test("renders status badge",                 () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "applied","applied","",""), "status-applied"));
+test("renders delete button",                () => assertContains(TMPL.pageHeader({id:5,title:"x"}, "not_applied","not applied","",""), "deleteJob(5)"));
+test("renders back link",                    () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "not_applied","not applied","",""), "← Back"));
+test("injects urlHtml",                      () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "not_applied","not applied","URL_HTML",""), "URL_HTML"));
+test("injects salaryHtml",                   () => assertContains(TMPL.pageHeader({id:1,title:"x"}, "not_applied","not applied","","SALARY_HTML"), "SALARY_HTML"));
+test("escapes title",                        () => assertNotContains(TMPL.pageHeader({id:1,title:"<b>bad</b>"}, "not_applied","not applied","",""), "<b>"));
+test("untitled fallback",                    () => assertContains(TMPL.pageHeader({id:1}, "not_applied","not applied","",""), "Untitled Job"));
+test("title edit button present",            () => assertContains(TMPL.pageHeader({id:1,title:"Dev"}, "not_applied","not applied","",""), "toggleFieldEdit('title')"));
+test("company edit button present",          () => assertContains(TMPL.pageHeader({id:1,title:"Dev",company:"Acme"}, "not_applied","not applied","",""), "toggleFieldEdit('company')"));
+test("location edit button present",         () => assertContains(TMPL.pageHeader({id:1,title:"Dev",location:"DC"}, "not_applied","not applied","",""), "toggleFieldEdit('location')"));
+test("title edit row has correct id",        () => assertContains(TMPL.pageHeader({id:1,title:"Dev"}, "not_applied","not applied","",""), 'id="field-edit-row-title"'));
+test("company edit row has correct id",      () => assertContains(TMPL.pageHeader({id:1,title:"Dev"}, "not_applied","not applied","",""), 'id="field-edit-row-company"'));
+test("location edit row has correct id",     () => assertContains(TMPL.pageHeader({id:1,title:"Dev"}, "not_applied","not applied","",""), 'id="field-edit-row-location"'));
+test("title edit row initially hidden",      () => { const h = TMPL.pageHeader({id:1,title:"Dev"}, "not_applied","not applied","",""); const m = h.match(/id="field-edit-row-title"[^>]*style="([^"]*)"/); assert(m && m[1].includes("display:none"), "title edit row not hidden"); });
+test("saveJobField called for title save",   () => assertContains(TMPL.pageHeader({id:7,title:"Dev"}, "not_applied","not applied","",""), "saveJobField(7, 'title'"));
+test("saveJobField called for company save", () => assertContains(TMPL.pageHeader({id:7,title:"Dev"}, "not_applied","not applied","",""), "saveJobField(7, 'company'"));
+test("saveJobField called for location save",() => assertContains(TMPL.pageHeader({id:7,title:"Dev"}, "not_applied","not applied","",""), "saveJobField(7, 'location'"));
+test("no company — shows placeholder",       () => assertContains(TMPL.pageHeader({id:1,title:"Dev",company:""}, "not_applied","not applied","",""), "no company"));
+test("no location — shows placeholder",      () => assertContains(TMPL.pageHeader({id:1,title:"Dev",location:""}, "not_applied","not applied","",""), "no location"));
+test("company value in edit input",          () => assertContains(TMPL.pageHeader({id:1,title:"Dev",company:"Acme"}, "not_applied","not applied","",""), 'id="field-edit-input-company"'));
+test("location value in edit input",         () => assertContains(TMPL.pageHeader({id:1,title:"Dev",location:"DC"}, "not_applied","not applied","",""), 'id="field-edit-input-location"'));
+test("escapes company XSS",                  () => assertNotContains(TMPL.pageHeader({id:1,title:"Dev",company:"<script>"}, "not_applied","not applied","",""), "<script>"));
+test("escapes location XSS",                 () => assertNotContains(TMPL.pageHeader({id:1,title:"Dev",location:"<script>"}, "not_applied","not applied","",""), "<script>"));
+
+
+section("toggleFieldEdit");
+
+function makeFieldEditDOM() {
+  ['title','company','location'].forEach(f => {
+    let r = document.getElementById(`field-edit-row-${f}`);
+    if (!r) {
+      r = document.createElement('div');
+      r.id = `field-edit-row-${f}`;
+      r.style.display = 'none';
+      const inp = document.createElement('input');
+      inp.id = `field-edit-input-${f}`;
+      r.appendChild(inp);
+      document.body.appendChild(r);
+    } else {
+      r.style.display = 'none';
+    }
+  });
+}
+function cleanFieldEditDOM() {
+  ['title','company','location'].forEach(f => {
+    const r = document.getElementById(`field-edit-row-${f}`);
+    if (r) document.body.removeChild(r);
+  });
+}
+
+test("opens target row",             () => { makeFieldEditDOM(); toggleFieldEdit('title');    assertEqual(document.getElementById('field-edit-row-title').style.display,    'flex'); cleanFieldEditDOM(); });
+test("closes already-open row",      () => { makeFieldEditDOM(); toggleFieldEdit('company');  toggleFieldEdit('company');  assertEqual(document.getElementById('field-edit-row-company').style.display,  'none'); cleanFieldEditDOM(); });
+test("only one row open at a time",  () => { makeFieldEditDOM(); toggleFieldEdit('title');    toggleFieldEdit('company');  assertEqual(document.getElementById('field-edit-row-title').style.display,    'none'); cleanFieldEditDOM(); });
+test("company row opens correctly",  () => { makeFieldEditDOM(); toggleFieldEdit('company');  assertEqual(document.getElementById('field-edit-row-company').style.display,  'flex'); cleanFieldEditDOM(); });
+test("location row opens correctly", () => { makeFieldEditDOM(); toggleFieldEdit('location'); assertEqual(document.getElementById('field-edit-row-location').style.display, 'flex'); cleanFieldEditDOM(); });
+test("noop for unknown field",       () => { makeFieldEditDOM(); toggleFieldEdit('bogus');    assertEqual(document.getElementById('field-edit-row-title').style.display,    'none'); cleanFieldEditDOM(); });
+
+
+section("saveJobField");
+
+let _sfFetchCalls = [];
+let _sfFetchResult = { ok: true, json: async () => ({ ok: true, title: "Updated" }) };
+const _origFetch = window.fetch;
+
+function setupSaveFetch(result) {
+  _sfFetchCalls = [];
+  _sfFetchResult = result;
+  window.fetch = async (url, opts) => { _sfFetchCalls.push({ url, opts }); return _sfFetchResult; };
+}
+function teardownSaveFetch() { window.fetch = _origFetch; }
+
+test("calls correct URL for title",    async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,title:"X"}) }); await saveJobField(5,'title','X'); assert(_sfFetchCalls.length===1); assertContains(_sfFetchCalls[0].url,'/api/jobs/5/title'); teardownSaveFetch(); });
+test("calls correct URL for company",  async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,company:"X"}) }); await saveJobField(5,'company','X'); assertContains(_sfFetchCalls[0].url,'/api/jobs/5/company'); teardownSaveFetch(); });
+test("calls correct URL for location", async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,location:"X"}) }); await saveJobField(5,'location','X'); assertContains(_sfFetchCalls[0].url,'/api/jobs/5/location'); teardownSaveFetch(); });
+test("uses PATCH method",              async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,title:"X"}) }); await saveJobField(3,'title','Dev'); assertEqual(_sfFetchCalls[0].opts.method,'PATCH'); teardownSaveFetch(); });
+test("empty title — no fetch",         async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true}) }); await saveJobField(1,'title','   '); assertEqual(_sfFetchCalls.length, 0); teardownSaveFetch(); });
+test("empty title — toast error",      async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true}) }); await saveJobField(1,'title',''); assertEqual(document.getElementById('toast').textContent, 'Title cannot be empty'); teardownSaveFetch(); });
+test("empty company — fetch proceeds", async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,company:""}) }); await saveJobField(1,'company',''); assertEqual(_sfFetchCalls.length, 1); teardownSaveFetch(); });
+test("empty location — fetch proceeds",async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,location:""}) }); await saveJobField(1,'location',''); assertEqual(_sfFetchCalls.length, 1); teardownSaveFetch(); });
+test("server error — toast error",     async () => { setupSaveFetch({ ok:false, json: async()=>({error:"Not found"}) }); await saveJobField(1,'title','X'); assertContains(document.getElementById('toast').className,'error'); teardownSaveFetch(); });
+test("sends field value in FormData",  async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,title:"Dev"}) }); await saveJobField(2,'title','Dev'); const fd = _sfFetchCalls[0].opts.body; assert(fd instanceof FormData); assertEqual(fd.get('title'),'Dev'); teardownSaveFetch(); });
 
 
 section("TMPL.applicationTab");

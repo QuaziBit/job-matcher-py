@@ -843,6 +843,84 @@ async def update_job_url(
     return JSONResponse({"ok": True, "url": url})
 
 
+@app.patch("/api/jobs/{job_id}/title")
+async def update_job_title(
+    job_id: int,
+    title: str = Form(""),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Update the title of a saved job."""
+    title = title.strip()
+
+    if not title:
+        return JSONResponse({"error": "Title cannot be empty."}, status_code=422)
+
+    async with db.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return JSONResponse({"error": "Job not found."}, status_code=404)
+
+    try:
+        await db.execute("UPDATE jobs SET title = ? WHERE id = ?", (title, job_id))
+        await db.commit()
+    except Exception as e:
+        logger.error(f"✗ update_job_title DB error for job {job_id}: {e}")
+        return JSONResponse({"error": "Failed to update title."}, status_code=500)
+
+    logger.info(f"✓ Job {job_id} title updated to: {title}")
+    return JSONResponse({"ok": True, "title": title})
+
+
+@app.patch("/api/jobs/{job_id}/company")
+async def update_job_company(
+    job_id: int,
+    company: str = Form(""),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Update the company name of a saved job."""
+    company = company.strip()
+
+    async with db.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return JSONResponse({"error": "Job not found."}, status_code=404)
+
+    try:
+        await db.execute("UPDATE jobs SET company = ? WHERE id = ?", (company, job_id))
+        await db.commit()
+    except Exception as e:
+        logger.error(f"✗ update_job_company DB error for job {job_id}: {e}")
+        return JSONResponse({"error": "Failed to update company."}, status_code=500)
+
+    logger.info(f"✓ Job {job_id} company updated to: {company!r}")
+    return JSONResponse({"ok": True, "company": company})
+
+
+@app.patch("/api/jobs/{job_id}/location")
+async def update_job_location(
+    job_id: int,
+    location: str = Form(""),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Update the location of a saved job."""
+    location = location.strip()
+
+    async with db.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return JSONResponse({"error": "Job not found."}, status_code=404)
+
+    try:
+        await db.execute("UPDATE jobs SET location = ? WHERE id = ?", (location, job_id))
+        await db.commit()
+    except Exception as e:
+        logger.error(f"✗ update_job_location DB error for job {job_id}: {e}")
+        return JSONResponse({"error": "Failed to update location."}, status_code=500)
+
+    logger.info(f"✓ Job {job_id} location updated to: {location!r}")
+    return JSONResponse({"ok": True, "location": location})
+
+
 @app.post("/api/resumes/extract")
 async def extract_resume_file(file: UploadFile = File(...)):
     """Extract plain text from an uploaded TXT, PDF, or DOCX file."""
