@@ -999,6 +999,12 @@ test("single job shows singular",       () => { const c = {...BASE_COMPANY, jobs
 test("renders date tag for job",        () => assertContains(renderCompaniesView([BASE_COMPANY]), "date-tag"));
 test("renders formatted date",          () => assertContains(renderCompaniesView([BASE_COMPANY]), "added"));
 test("no date tag when scraped_at null",() => { const c = {...BASE_COMPANY, jobs:[{...BASE_COMPANY.jobs[0], scraped_at:null}]}; assertNotContains(renderCompaniesView([c]), "added"); });
+test("renders BBB link",               () => assertContains(renderCompaniesView([BASE_COMPANY]), "bbb.org"));
+test("renders Glassdoor link",         () => assertContains(renderCompaniesView([BASE_COMPANY]), "glassdoor.com"));
+test("renders LinkedIn company link",  () => assertContains(renderCompaniesView([BASE_COMPANY]), "linkedin.com/company"));
+test("links open in new tab",          () => assertContains(renderCompaniesView([BASE_COMPANY]), 'target="_blank"'));
+test("company name encoded in BBB URL",() => { const c = {...BASE_COMPANY, company:"Acme Corp"}; assertContains(renderCompaniesView([c]), "Acme%20Corp"); });
+test("no quick links when no company", () => assertNotContains(renderCompaniesView([{company:"", jobs:[]}]), "bbb.org"));
 
 
 section("renderRecruitersView");
@@ -1029,6 +1035,10 @@ test("escapes HTML in email",           () => assertNotContains(renderRecruiters
 test("renders date tag for job",        () => assertContains(renderRecruitersView([BASE_RECRUITER]), "date-tag"));
 test("renders formatted date",          () => assertContains(renderRecruitersView([BASE_RECRUITER]), "added"));
 test("no date tag when scraped_at null",() => { const r = {...BASE_RECRUITER, jobs:[{...BASE_RECRUITER.jobs[0], scraped_at:null}]}; assertNotContains(renderRecruitersView([r]), "added"); });
+test("renders LinkedIn link",          () => assertContains(renderRecruitersView([BASE_RECRUITER]), "linkedin.com/search/results/people"));
+test("LinkedIn link uses recruiter name",() => assertContains(renderRecruitersView([BASE_RECRUITER]), "Jane%20Doe"));
+test("LinkedIn link opens in new tab", () => assertContains(renderRecruitersView([BASE_RECRUITER]), 'target="_blank"'));
+test("no LinkedIn link when no name or email", () => assertNotContains(renderRecruitersView([{...BASE_RECRUITER, name:"", email:""}]), "linkedin.com/search"));
 
 
 section("paginateItems");

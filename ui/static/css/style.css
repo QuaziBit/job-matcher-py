@@ -329,6 +329,21 @@ label {
   opacity: 0.5;
   color: var(--text-mute);
 }
+.quick-link {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--amber);
+  text-decoration: none;
+  opacity: 0.75;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.quick-link:hover {
+  opacity: 1;
+  border-color: var(--amber);
+}
 .location-code {
   display: inline-block;
   font-family: var(--font-mono);

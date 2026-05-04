@@ -2339,6 +2339,14 @@ function renderCompaniesView(companies) {
         ${j.recruiter_name ? `<span class="text-xs text-dim">${escHtml(j.recruiter_name)}</span>` : ''}
       </div>`).join('');
 
+    const enc   = encodeURIComponent(c.company);
+    const links = c.company ? `
+      <div class="quick-links" style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;">
+        <a href="https://www.bbb.org/search?find_text=${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">BBB</a>
+        <a href="https://www.glassdoor.com/Search/results.htm?keyword=${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">Glassdoor</a>
+        <a href="https://www.linkedin.com/company/${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">LinkedIn</a>
+      </div>` : '';
+
     return `
       <div class="card" style="margin-bottom:12px;">
         <div class="flex items-center gap-10" style="margin-bottom:${jobCount > 0 ? '10px' : '0'};">
@@ -2348,6 +2356,7 @@ function renderCompaniesView(companies) {
               ${jobCount} job${jobCount !== 1 ? 's' : ''}
               ${applied > 0 ? ' · ' + applied + ' applied' : ''}
             </div>
+            ${links}
           </div>
         </div>
         ${jobs}
@@ -2369,12 +2378,15 @@ function renderRecruitersView(recruiters) {
 
     const companies = r.companies.map(c => `<span class="provider-tag">${escHtml(c)}</span>`).join(' ');
 
+    const liQuery   = r.name ? r.name : (r.email ? r.email.split('@')[0] : '');
+    const liLink    = liQuery ? `<a href="https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(liQuery)}" target="_blank" rel="noopener noreferrer" class="quick-link" style="margin-left:8px;">LinkedIn</a>` : '';
+
     return `
       <div class="card" style="margin-bottom:12px;">
         <div class="flex items-center gap-10" style="margin-bottom:10px;">
           <div style="flex:1;">
             <div style="font-weight:500; font-size:15px;">
-              ${r.name ? escHtml(r.name) : '<span class="text-dim">Unknown Name</span>'}
+              ${r.name ? escHtml(r.name) : '<span class="text-dim">Unknown Name</span>'}${liLink}
             </div>
             <div class="text-xs text-mono mt-4" style="color:var(--amber);">
               ${r.email ? escHtml(r.email) : ''}
