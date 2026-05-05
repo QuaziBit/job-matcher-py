@@ -344,6 +344,18 @@ label {
   opacity: 1;
   border-color: var(--amber);
 }
+.red-flag-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--danger, #e05c5c);
+  background: rgba(224, 92, 92, 0.08);
+  border: 1px solid rgba(224, 92, 92, 0.3);
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: default;
+  white-space: nowrap;
+}
 .location-code {
   display: inline-block;
   font-family: var(--font-mono);

@@ -2325,6 +2325,66 @@ function vettingStatusBadge(status) {
   return `<span class="status-badge status-${escHtml(status || 'not_applied')}">${escHtml(label)}</span>`;
 }
 
+// ── Red flag detection ────────────────────────────────────────────────────────
+
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com','yahoo.com','hotmail.com','outlook.com','aol.com',
+  'icloud.com','protonmail.com','mail.com','ymail.com','live.com',
+  'msn.com','me.com','googlemail.com',
+]);
+
+const GENERIC_NAME_PATTERNS = [
+  /^hr\b/i, /\bhr team\b/i, /^recruiting$/i, /^recruiter$/i,
+  /^talent\b/i, /^staffing\b/i, /^hiring\b/i, /^no.?reply$/i,
+  /^careers$/i, /^jobs$/i, /^noreply$/i,
+];
+
+function redFlagsFor(entity, allRecruiters) {
+  const flags = [];
+
+  // ── Recruiter-level checks ──
+  if ('email' in entity || 'name' in entity) {
+    // Free email domain
+    if (entity.email) {
+      const domain = entity.email.split('@').pop().toLowerCase().trim();
+      if (FREE_EMAIL_DOMAINS.has(domain)) {
+        flags.push({ reason: `Free email domain (${domain})` });
+      }
+    }
+
+    // Generic recruiter name
+    const name = (entity.name || '').trim();
+    if (name && GENERIC_NAME_PATTERNS.some(p => p.test(name))) {
+      flags.push({ reason: `Generic recruiter name ("${name}")` });
+    }
+
+    // Same recruiter across 3+ unrelated companies
+    const companyCount = (entity.companies || []).length;
+    if (companyCount >= 3) {
+      flags.push({ reason: `Recruiter linked to ${companyCount} different companies` });
+    }
+  }
+
+  // ── Company-level checks ──
+  if ('jobs' in entity && !('email' in entity)) {
+    const anon = (entity.jobs || []).filter(
+      j => !j.recruiter_name && !j.recruiter_email && !j.recruiter_phone
+    ).length;
+    if (anon > 0) {
+      flags.push({ reason: `${anon} anonymous posting${anon !== 1 ? 's' : ''} (no recruiter info)` });
+    }
+  }
+
+  return flags;
+}
+
+function redFlagBadges(flags) {
+  if (!flags.length) return '';
+  return flags.map(f =>
+    `<span class="red-flag-badge" title="${escHtml(f.reason)}">🚩 ${escHtml(f.reason)}</span>`
+  ).join(' ');
+}
+
 function renderCompaniesView(companies) {
   if (!companies.length) return TMPL.emptyPanel('No companies yet — add some jobs first.');
   return companies.map(c => {
@@ -2339,13 +2399,15 @@ function renderCompaniesView(companies) {
         ${j.recruiter_name ? `<span class="text-xs text-dim">${escHtml(j.recruiter_name)}</span>` : ''}
       </div>`).join('');
 
-    const enc   = encodeURIComponent(c.company);
-    const links = c.company ? `
+    const enc    = encodeURIComponent(c.company);
+    const links  = c.company ? `
       <div class="quick-links" style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;">
         <a href="https://www.bbb.org/search?find_text=${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">BBB</a>
         <a href="https://www.glassdoor.com/Search/results.htm?keyword=${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">Glassdoor</a>
         <a href="https://www.linkedin.com/company/${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">LinkedIn</a>
       </div>` : '';
+    const flags  = redFlagsFor(c, []);
+    const badges = redFlagBadges(flags);
 
     return `
       <div class="card" style="margin-bottom:12px;">
@@ -2356,6 +2418,7 @@ function renderCompaniesView(companies) {
               ${jobCount} job${jobCount !== 1 ? 's' : ''}
               ${applied > 0 ? ' · ' + applied + ' applied' : ''}
             </div>
+            ${badges ? `<div class="red-flag-row" style="margin-top:6px;">${badges}</div>` : ''}
             ${links}
           </div>
         </div>
@@ -2377,9 +2440,10 @@ function renderRecruitersView(recruiters) {
       </div>`).join('');
 
     const companies = r.companies.map(c => `<span class="provider-tag">${escHtml(c)}</span>`).join(' ');
-
     const liQuery   = r.name ? r.name : (r.email ? r.email.split('@')[0] : '');
     const liLink    = liQuery ? `<a href="https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(liQuery)}" target="_blank" rel="noopener noreferrer" class="quick-link" style="margin-left:8px;">LinkedIn</a>` : '';
+    const flags     = redFlagsFor(r, recruiters);
+    const badges    = redFlagBadges(flags);
 
     return `
       <div class="card" style="margin-bottom:12px;">
@@ -2393,6 +2457,7 @@ function renderRecruitersView(recruiters) {
               ${r.phone ? ' · ' + escHtml(r.phone) : ''}
             </div>
             <div style="margin-top:6px;">${companies}</div>
+            ${badges ? `<div class="red-flag-row" style="margin-top:6px;">${badges}</div>` : ''}
           </div>
           <div class="text-xs text-dim text-mono">
             ${jobCount} job${jobCount !== 1 ? 's' : ''}

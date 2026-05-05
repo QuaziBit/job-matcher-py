@@ -1005,6 +1005,18 @@ test("renders LinkedIn company link",  () => assertContains(renderCompaniesView(
 test("links open in new tab",          () => assertContains(renderCompaniesView([BASE_COMPANY]), 'target="_blank"'));
 test("company name encoded in BBB URL",() => { const c = {...BASE_COMPANY, company:"Acme Corp"}; assertContains(renderCompaniesView([c]), "Acme%20Corp"); });
 test("no quick links when no company", () => assertNotContains(renderCompaniesView([{company:"", jobs:[]}]), "bbb.org"));
+test("shows red flag badge for anon posting", () => {
+  const c = { company:"Co", jobs:[{id:1,title:"Dev",status:"not_applied",scraped_at:null,recruiter_name:"",recruiter_email:"",recruiter_phone:""}]};
+  assertContains(renderCompaniesView([c]), "🚩");
+});
+test("no red flag badge when recruiter present", () => {
+  const c = { company:"Co", jobs:[{id:1,title:"Dev",status:"not_applied",scraped_at:null,recruiter_name:"Jane",recruiter_email:"jane@co.com",recruiter_phone:""}]};
+  assertNotContains(renderCompaniesView([c]), "red-flag-badge");
+});
+test("anon posting badge contains reason", () => {
+  const c = { company:"Co", jobs:[{id:1,title:"Dev",status:"not_applied",scraped_at:null,recruiter_name:"",recruiter_email:"",recruiter_phone:""}]};
+  assertContains(renderCompaniesView([c]), "anonymous");
+});
 
 
 section("renderRecruitersView");
@@ -1039,6 +1051,45 @@ test("renders LinkedIn link",          () => assertContains(renderRecruitersView
 test("LinkedIn link uses recruiter name",() => assertContains(renderRecruitersView([BASE_RECRUITER]), "Jane%20Doe"));
 test("LinkedIn link opens in new tab", () => assertContains(renderRecruitersView([BASE_RECRUITER]), 'target="_blank"'));
 test("no LinkedIn link when no name or email", () => assertNotContains(renderRecruitersView([{...BASE_RECRUITER, name:"", email:""}]), "linkedin.com/search"));
+test("shows red flag for free email",  () => assertContains(renderRecruitersView([{...BASE_RECRUITER, email:"jane@gmail.com"}]), "🚩"));
+test("shows red flag for generic name",() => assertContains(renderRecruitersView([{...BASE_RECRUITER, name:"HR Team"}]), "🚩"));
+test("shows red flag for 3+ companies",() => assertContains(renderRecruitersView([{...BASE_RECRUITER, companies:["A","B","C"]}]), "🚩"));
+test("no red flag for clean recruiter",() => assertNotContains(renderRecruitersView([BASE_RECRUITER]), "red-flag-badge"));
+
+
+section("redFlagsFor");
+
+const CLEAN_RECRUITER = { name:"Jane Doe", email:"jane@acme.com", phone:"", companies:["Acme"], jobs:[] };
+const CLEAN_COMPANY   = { company:"Acme", jobs:[{id:1,title:"Dev",status:"not_applied",scraped_at:null,recruiter_name:"Jane",recruiter_email:"jane@acme.com",recruiter_phone:""}] };
+const ANON_COMPANY    = { company:"Acme", jobs:[{id:1,title:"Dev",status:"not_applied",scraped_at:null,recruiter_name:"",recruiter_email:"",recruiter_phone:""}] };
+
+test("clean recruiter — no flags",           () => assertEqual(redFlagsFor(CLEAN_RECRUITER, []).length, 0));
+test("clean company — no flags",             () => assertEqual(redFlagsFor(CLEAN_COMPANY, []).length, 0));
+test("gmail flags free email",               () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, email:"x@gmail.com"}, []).length, 1));
+test("yahoo flags free email",               () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, email:"x@yahoo.com"}, []).length, 1));
+test("outlook flags free email",             () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, email:"x@outlook.com"}, []).length, 1));
+test("corporate email — no flag",            () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, email:"x@corp.com"}, []).length, 0));
+test("no email — no free email flag",        () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, email:""}, []).length, 0));
+test("'HR Team' flags generic name",         () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, name:"HR Team"}, []).length, 1));
+test("'Recruiting' flags generic name",      () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, name:"Recruiting"}, []).length, 1));
+test("'Talent Acquisition' not flagged",     () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, name:"Talent Acquisition"}, []).length, 1)); // matches /^talent/i
+test("3 companies flags multi-company",      () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, companies:["A","B","C"]}, []).length, 1));
+test("2 companies — no flag",                () => assertEqual(redFlagsFor({...CLEAN_RECRUITER, companies:["A","B"]}, []).length, 0));
+test("anon posting flags company",           () => assertEqual(redFlagsFor(ANON_COMPANY, []).length, 1));
+test("anon flag reason mentions anonymous",  () => assertContains(redFlagsFor(ANON_COMPANY, []).map(f=>f.reason).join(''), "anonymous"));
+test("company with recruiter — no anon flag",() => assertEqual(redFlagsFor(CLEAN_COMPANY, []).length, 0));
+test("multiple flags accumulate",            () => { const r = {...CLEAN_RECRUITER, email:"x@gmail.com", name:"HR Team", companies:["A","B","C"]}; assertEqual(redFlagsFor(r, []).length, 3); });
+test("free email flag reason mentions domain",() => assertContains(redFlagsFor({...CLEAN_RECRUITER, email:"x@gmail.com"}, []).map(f=>f.reason).join(''), "gmail.com"));
+
+
+section("redFlagBadges");
+
+test("empty flags returns empty string",    () => assertEqual(redFlagBadges([]), ""));
+test("single flag renders badge",           () => assertContains(redFlagBadges([{reason:"Test reason"}]), "🚩"));
+test("badge contains reason text",          () => assertContains(redFlagBadges([{reason:"Free email"}]), "Free email"));
+test("badge has title attribute",           () => assertContains(redFlagBadges([{reason:"Free email"}]), 'title='));
+test("multiple flags render multiple badges",() => assertEqual((redFlagBadges([{reason:"A"},{reason:"B"}]).match(/🚩/g)||[]).length, 2));
+test("escapes HTML in reason",              () => assertNotContains(redFlagBadges([{reason:"<script>"}]), "<script>"));
 
 
 section("paginateItems");
