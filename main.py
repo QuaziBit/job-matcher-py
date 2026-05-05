@@ -10,8 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 import aiosqlite
-from database import get_db, init_db
+from database import get_db, init_db, get_company_meta, upsert_company_meta
 from scraper import scrape_job, assess_job_text_quality
+from company_crawler import crawl_company
 from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model, BLOCKER_KEYWORDS
 from analyzer.config import anthropic_model, openai_model, gemini_model
 from analyzer.known_models import KNOWN_MODELS
@@ -919,6 +920,54 @@ async def update_job_location(
 
     logger.info(f"✓ Job {job_id} location updated to: {location!r}")
     return JSONResponse({"ok": True, "location": location})
+
+
+@app.post("/api/companies/crawl")
+async def crawl_company_endpoint(company_name: str = Form("")):
+    """
+    Crawl 7 sources for a company name and return merged vetting data.
+    Results are cached in company_meta for 7 days.
+    """
+    company_name = company_name.strip()
+    if not company_name:
+        return JSONResponse({"error": "company_name is required."}, status_code=422)
+
+    # Return cached result if fresh (within 7 days)
+    cached = await get_company_meta(company_name)
+    if cached:
+        from datetime import datetime, timezone
+        try:
+            raw = cached["crawled_at"].replace("Z", "+00:00")
+            crawled_at = datetime.fromisoformat(raw)
+            # SQLite CURRENT_TIMESTAMP returns naive strings — treat as UTC
+            if crawled_at.tzinfo is None:
+                crawled_at = crawled_at.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - crawled_at).days
+            if age_days < 7:
+                logger.info(f"✓ Returning cached company_meta for: {company_name!r}")
+                return JSONResponse({"ok": True, "cached": True, **cached})
+        except Exception:
+            pass
+
+    logger.info(f"→ Crawling company: {company_name!r}")
+    data = await crawl_company(company_name)
+    await upsert_company_meta(company_name, data)
+
+    result = await get_company_meta(company_name) or {"company_name": company_name}
+    logger.info(f"✓ Crawl complete for: {company_name!r} — {len(data)} fields found")
+    return JSONResponse({"ok": True, "cached": False, **result})
+
+
+@app.get("/api/companies/meta")
+async def get_company_meta_endpoint(company_name: str = ""):
+    """Return cached company_meta for a given company name, or null if not crawled."""
+    company_name = company_name.strip()
+    if not company_name:
+        return JSONResponse({"error": "company_name is required."}, status_code=422)
+    row = await get_company_meta(company_name)
+    if row is None:
+        return JSONResponse({"ok": True, "cached": False, "company_name": company_name})
+    return JSONResponse({"ok": True, "cached": True, **row})
 
 
 @app.post("/api/resumes/extract")

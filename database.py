@@ -103,6 +103,20 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS company_meta (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_name TEXT NOT NULL UNIQUE,
+                glassdoor_url TEXT DEFAULT '',
+                glassdoor_rating REAL DEFAULT NULL,
+                glassdoor_review_count INTEGER DEFAULT NULL,
+                linkedin_url TEXT DEFAULT '',
+                linkedin_employee_count TEXT DEFAULT '',
+                linkedin_founded TEXT DEFAULT '',
+                bbb_url TEXT DEFAULT '',
+                bbb_rating TEXT DEFAULT '',
+                crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         await db.commit()
 
@@ -126,3 +140,42 @@ async def init_db():
                 await db.commit()
             except Exception:
                 pass  # Column already exists — safe to ignore
+
+
+# ── company_meta helpers ──────────────────────────────────────────────────────
+
+COMPANY_META_FIELDS = [
+    "glassdoor_url", "glassdoor_rating", "glassdoor_review_count",
+    "linkedin_url", "linkedin_employee_count", "linkedin_founded",
+    "bbb_url", "bbb_rating",
+    "crawled_at",
+]
+
+
+async def get_company_meta(company_name: str) -> dict | None:
+    """Return cached company_meta row or None if not found."""
+    async with aiosqlite.connect(_db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM company_meta WHERE company_name = ?",
+            (company_name,)
+        ) as cur:
+            row = await cur.fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
+async def upsert_company_meta(company_name: str, data: dict) -> None:
+    """Insert or replace company_meta for a given company name.
+    Always writes a row (even on empty crawl) so repeat clicks hit the cache."""
+    fields = [f for f in COMPANY_META_FIELDS if f != "crawled_at" and f in data]
+    cols = ", ".join(["company_name"] + fields + ["crawled_at"])
+    placeholders = ", ".join(["?"] * (len(fields) + 1)) + ", CURRENT_TIMESTAMP"
+    values = [company_name] + [data.get(f) for f in fields]
+    async with aiosqlite.connect(_db_path()) as db:
+        await db.execute(
+            f"INSERT OR REPLACE INTO company_meta ({cols}) VALUES ({placeholders})",
+            values,
+        )
+        await db.commit()

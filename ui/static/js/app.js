@@ -2400,12 +2400,17 @@ function renderCompaniesView(companies) {
       </div>`).join('');
 
     const enc    = encodeURIComponent(c.company);
+    const safeId = enc.replace(/[^a-zA-Z0-9]/g, '_');
     const links  = c.company ? `
-      <div class="quick-links" style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;">
+      <div class="quick-links" style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <a href="https://www.bbb.org/search?find_text=${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">BBB</a>
         <a href="https://www.glassdoor.com/Search/results.htm?keyword=${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">Glassdoor</a>
         <a href="https://www.linkedin.com/company/${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">LinkedIn</a>
-      </div>` : '';
+        <a href="https://www.google.com/search?q=${enc}+reviews+site:glassdoor.com+OR+site:bbb.org" target="_blank" rel="noopener noreferrer" class="quick-link">🔍 Search</a>
+        <button class="btn btn-ghost btn-xs" style="font-size:11px;" onclick="crawlCompany('${escHtml(c.company)}', '${safeId}')">🕷 Vet</button>
+        <span id="crawl-spinner-${safeId}" style="display:none; font-size:11px; color:var(--text-mute);">crawling…</span>
+      </div>
+      <div id="crawl-results-${safeId}" style="margin-top:6px;"></div>` : '';
     const flags  = redFlagsFor(c, []);
     const badges = redFlagBadges(flags);
 
@@ -2426,6 +2431,66 @@ function renderCompaniesView(companies) {
       </div>`;
   }).join('');
 }
+
+// ── Company crawler UI ────────────────────────────────────────────────────────
+
+async function crawlCompany(companyName, safeId) {
+  log('crawlCompany', `company="${companyName}" id="${safeId}"`);
+  const spinner = document.getElementById(`crawl-spinner-${safeId}`);
+  const results = document.getElementById(`crawl-results-${safeId}`);
+  if (!results) return;
+
+  if (spinner) spinner.style.display = 'inline';
+  results.innerHTML = '';
+
+  try {
+    const fd = new FormData();
+    fd.append('company_name', companyName);
+    const res  = await fetch('/api/companies/crawl', { method: 'POST', body: fd });
+    const data = await res.json();
+    log('crawlCompany', `status=${res.status} cached=${data.cached}`, data);
+    if (!res.ok) {
+      results.innerHTML = `<span class="text-xs text-dim">Crawl failed: ${escHtml(data.error || 'unknown error')}</span>`;
+      return;
+    }
+    results.innerHTML = renderCrawlResults(data);
+  } catch(err) {
+    logErr('crawlCompany', 'fetch threw:', err);
+    results.innerHTML = `<span class="text-xs text-dim">Network error during crawl.</span>`;
+  } finally {
+    if (spinner) spinner.style.display = 'none';
+  }
+}
+
+function renderCrawlResults(data) {
+  const sources = [
+    { label: 'Glassdoor', url: data.glassdoor_url, extra: data.glassdoor_rating ? `⭐ ${data.glassdoor_rating}` + (data.glassdoor_review_count ? ` (${data.glassdoor_review_count.toLocaleString()} reviews)` : '') : '' },
+    { label: 'Indeed',    url: data.indeed_url,    extra: data.indeed_rating    ? `⭐ ${data.indeed_rating}`    + (data.indeed_review_count    ? ` (${data.indeed_review_count.toLocaleString()} reviews)`    : '') : '' },
+    { label: 'LinkedIn',  url: data.linkedin_url,  extra: [data.linkedin_employee_count ? `👥 ${data.linkedin_employee_count} employees` : '', data.linkedin_founded ? `est. ${data.linkedin_founded}` : ''].filter(Boolean).join(' · ') },
+    { label: 'Crunchbase',url: data.crunchbase_url,extra: [data.crunchbase_founded ? `est. ${data.crunchbase_founded}` : '', data.crunchbase_funding ? `💰 ${data.crunchbase_funding}` : ''].filter(Boolean).join(' · ') },
+    { label: 'Trustpilot',url: data.trustpilot_url,extra: data.trustpilot_rating ? `⭐ ${data.trustpilot_rating}` : '' },
+    { label: 'G2',        url: data.g2_url,        extra: data.g2_rating        ? `⭐ ${data.g2_rating}`        : '' },
+    { label: 'BBB',       url: data.bbb_url,       extra: data.bbb_rating       ? `Grade: ${data.bbb_rating}`  : '' },
+  ];
+
+  const found = sources.filter(s => s.url);
+  if (!found.length) {
+    return `<span class="text-xs text-dim">No results found for this company name.</span>`;
+  }
+
+  const tag = data.cached
+    ? `<span class="text-xs text-dim" style="margin-left:6px;">cached</span>`
+    : `<span class="text-xs text-dim" style="margin-left:6px;">just crawled</span>`;
+
+  const links = found.map(s => `
+    <span class="crawl-result-item">
+      <a href="${escHtml(s.url)}" target="_blank" rel="noopener noreferrer" class="quick-link">${escHtml(s.label)}</a>
+      ${s.extra ? `<span class="text-xs text-dim" style="margin-left:3px;">${escHtml(s.extra)}</span>` : ''}
+    </span>`).join('');
+
+  return `<div class="flex items-center gap-8" style="flex-wrap:wrap;">${links}${tag}</div>`;
+}
+
 
 function renderRecruitersView(recruiters) {
   if (!recruiters.length) return TMPL.emptyPanel('No recruiters yet — add recruiter info to your jobs first.');

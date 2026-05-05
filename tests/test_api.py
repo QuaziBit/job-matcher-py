@@ -2016,3 +2016,55 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         resp = await self.client.get("/vetting")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("text/html", resp.headers.get("content-type", ""))
+
+    # ── POST /api/companies/crawl ──────────────────────────────────────────
+
+    async def test_crawl_company_empty_name_returns_422(self):
+        """Empty company_name should return 422."""
+        resp = await self.client.post("/api/companies/crawl", data={"company_name": ""})
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_crawl_company_returns_ok_with_mocked_crawler(self):
+        """With mocked crawl_company, endpoint returns ok:True and caches result."""
+        from unittest.mock import patch, AsyncMock
+        mock_data = {
+            "glassdoor_url": "https://glassdoor.com/acme",
+            "glassdoor_rating": 4.2,
+            "bbb_url": "https://bbb.org/acme",
+            "bbb_rating": "A+",
+        }
+        with patch("main.crawl_company", new_callable=AsyncMock, return_value=mock_data):
+            resp = await self.client.post("/api/companies/crawl", data={"company_name": "Acme Corp"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["ok"])
+        self.assertFalse(data["cached"])
+        self.assertEqual(data["company_name"], "Acme Corp")
+
+    async def test_crawl_company_returns_cached_on_second_call(self):
+        """Second call within 7 days should return cached=True without re-crawling."""
+        from unittest.mock import patch, AsyncMock
+        mock_data = {"glassdoor_url": "https://glassdoor.com/acme", "glassdoor_rating": 4.2}
+        with patch("main.crawl_company", new_callable=AsyncMock, return_value=mock_data) as mock_fn:
+            await self.client.post("/api/companies/crawl", data={"company_name": "CacheTest Inc"})
+            resp2 = await self.client.post("/api/companies/crawl", data={"company_name": "CacheTest Inc"})
+            self.assertEqual(mock_fn.call_count, 1)  # only called once
+        self.assertTrue(resp2.json()["cached"])
+
+    async def test_get_company_meta_not_found_returns_cached_false(self):
+        """GET /api/companies/meta for unknown company returns cached:False."""
+        resp = await self.client.get("/api/companies/meta?company_name=Nobody+Corp")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertFalse(data["cached"])
+
+    async def test_get_company_meta_after_crawl_returns_cached_true(self):
+        """GET /api/companies/meta after a crawl returns cached:True with data."""
+        from unittest.mock import patch, AsyncMock
+        mock_data = {"bbb_rating": "B", "bbb_url": "https://bbb.org/test"}
+        with patch("main.crawl_company", new_callable=AsyncMock, return_value=mock_data):
+            await self.client.post("/api/companies/crawl", data={"company_name": "MetaTest LLC"})
+        resp = await self.client.get("/api/companies/meta?company_name=MetaTest+LLC")
+        data = resp.json()
+        self.assertTrue(data["cached"])
+        self.assertEqual(data["company_name"], "MetaTest LLC")
