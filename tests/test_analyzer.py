@@ -291,6 +291,27 @@ class TestAnalyzeWithOllama(unittest.TestCase):
             run(analyze_with_ollama("resume", "job"))
         self.assertIn("Chunked analysis failed", str(ctx.exception))
 
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_ollama_payload_has_think_false(self, mock_client_cls):
+        """Ollama requests must include think:False to suppress reasoning tokens."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": MOCK_LLM_RESPONSE_POOR}}
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        from analyzer import analyze_with_ollama
+        run(analyze_with_ollama(MOCK_RESUME_DEVSECOPS, MOCK_JOB_MARKETING))
+
+        call_kwargs = mock_client.post.call_args
+        payload = call_kwargs[1].get("json") or call_kwargs[0][1]
+        options = payload.get("options", {})
+        self.assertIn("think", options)
+        self.assertFalse(options["think"], "think must be False to suppress Gemma4 reasoning tokens")
+
 
 class TestAnalyzeMatchDispatch(unittest.TestCase):
     @patch("analyzer.llm.call_anthropic_once", new_callable=AsyncMock)
@@ -326,6 +347,149 @@ class TestAnalyzeMatchDispatch(unittest.TestCase):
         run(analyze_match("resume", "job", provider="ollama"))
         mock_ollama_chunked.assert_called_once()
         mock_anthropic.assert_not_called()
+
+    @patch("analyzer.llm.ollama_model", return_value="gemma4:e2b")
+    @patch("analyzer.llm.call_ollama_thinking", new_callable=AsyncMock)
+    @patch("analyzer.llm.call_ollama_chunked", new_callable=AsyncMock)
+    def test_thinking_model_routes_to_thinking_not_chunked(self, mock_chunked, mock_thinking, mock_model):
+        """Thinking models (gemma4, deepseek-r1) must use call_ollama_thinking."""
+        mock_thinking.return_value = {
+            "score": 4, "adjusted_score": 4, "llm_provider": "ollama",
+            "llm_model": "gemma4:e2b",
+            "matched_skills": [{"skill": "Python", "match_type": "exact",
+                                 "jd_snippet": "Python required",
+                                 "resume_snippet": "Python dev", "category": "backend"}],
+            "missing_skills": [], "reasoning": "Good match",
+            "penalty_breakdown": {}, "suggestions": [],
+        }
+        from analyzer import analyze_match
+        run(analyze_match("resume", "job", provider="ollama"))
+        mock_thinking.assert_called_once()
+        mock_chunked.assert_not_called()
+
+
+class TestCallOllamaThinking(unittest.TestCase):
+    """Tests for call_ollama_thinking — mocks httpx.AsyncClient."""
+
+    def _mock_responses(self, body_a: str, body_b: str, status: int = 200):
+        """Build a mock httpx client that returns body_a then body_b."""
+        resps = [
+            MagicMock(json=MagicMock(return_value={"message": {"content": body_a}}),
+                      raise_for_status=MagicMock()),
+            MagicMock(json=MagicMock(return_value={"message": {"content": body_b}}),
+                      raise_for_status=MagicMock()),
+        ]
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(side_effect=resps)
+        return mock_client
+
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_merges_call_a_and_call_b(self, mock_client_cls):
+        """Both calls succeed — result has score, matched, missing, suggestions."""
+        import json
+        body_a = json.dumps({
+            "score": 4, "reasoning": "Strong match.",
+            "matched_skills": [{"skill": "Python", "match_type": "exact",
+                                 "jd_snippet": "Python required", "resume_snippet": "Python dev"}]
+        })
+        body_b = json.dumps({
+            "missing_skills": [{"skill": "AWS Lambda", "severity": "major",
+                                 "requirement_type": "preferred", "jd_snippet": "Lambda required"}],
+            "suggestions": [{"title": "Add AWS", "detail": "Mention AWS experience."}]
+        })
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        from analyzer.llm import call_ollama_thinking
+        result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertEqual(result["score"], 4)
+        self.assertEqual(result["reasoning"], "Strong match.")
+        self.assertEqual(len(result["matched_skills"]), 1)
+        self.assertEqual(result["matched_skills"][0]["skill"], "Python")
+        self.assertEqual(len(result["missing_skills"]), 1)
+        self.assertEqual(len(result["suggestions"]), 1)
+        self.assertEqual(result["llm_provider"], "ollama")
+
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_call_a_failure_raises(self, mock_client_cls):
+        """If call A has no score, ValueError is raised."""
+        body_a = '{"reasoning": "no score here"}'
+        body_b = '{"missing_skills": [], "suggestions": []}'
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        from analyzer.llm import call_ollama_thinking
+        with self.assertRaises(ValueError) as ctx:
+            run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertIn("score", str(ctx.exception))
+
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_call_b_failure_returns_empty_missing(self, mock_client_cls):
+        """If call B fails, missing_skills and suggestions are empty but result is valid."""
+        import json
+        body_a = json.dumps({
+            "score": 3, "reasoning": "Moderate match.",
+            "matched_skills": [{"skill": "Python", "match_type": "exact",
+                                 "jd_snippet": "Python", "resume_snippet": "Python"}]
+        })
+        body_b = "not valid json at all"
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        from analyzer.llm import call_ollama_thinking
+        result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertEqual(result["score"], 3)
+        self.assertEqual(result["missing_skills"], [])
+        self.assertEqual(result["suggestions"], [])
+
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_makes_exactly_two_http_calls(self, mock_client_cls):
+        """Exactly two POST calls are made — call A and call B."""
+        import json
+        body_a = json.dumps({"score": 4, "reasoning": "Good.", "matched_skills": []})
+        body_b = json.dumps({"missing_skills": [], "suggestions": []})
+        mock_client = self._mock_responses(body_a, body_b)
+        mock_client_cls.return_value = mock_client
+        from analyzer.llm import call_ollama_thinking
+        run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertEqual(mock_client.post.call_count, 2)
+
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_score_clamped_to_valid_range(self, mock_client_cls):
+        """Score outside 1-5 is clamped."""
+        import json
+        body_a = json.dumps({"score": 10, "reasoning": "Perfect.", "matched_skills": []})
+        body_b = json.dumps({"missing_skills": [], "suggestions": []})
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        from analyzer.llm import call_ollama_thinking
+        result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertLessEqual(result["score"], 5)
+        self.assertGreaterEqual(result["score"], 1)
+
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_result_has_penalty_fields(self, mock_client_cls):
+        """Result always contains adjusted_score and penalty_breakdown."""
+        import json
+        body_a = json.dumps({"score": 4, "reasoning": "Good.", "matched_skills": []})
+        body_b = json.dumps({"missing_skills": [], "suggestions": []})
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        from analyzer.llm import call_ollama_thinking
+        result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertIn("adjusted_score", result)
+        self.assertIn("penalty_breakdown", result)
+        self.assertIn("validation_errors", result)
+        self.assertIn("used_fallback", result)
+
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_blocker_reduces_adjusted_score(self, mock_client_cls):
+        """A blocker in missing_skills should reduce adjusted_score below score."""
+        import json
+        body_a = json.dumps({"score": 4, "reasoning": "Good.", "matched_skills": []})
+        body_b = json.dumps({
+            "missing_skills": [{"skill": "Security Clearance", "severity": "blocker",
+                                 "requirement_type": "hard", "jd_snippet": "clearance required"}],
+            "suggestions": []
+        })
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        from analyzer.llm import call_ollama_thinking
+        result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        self.assertLess(result["adjusted_score"], result["score"])
 
 
 class TestEscapeControlChars(unittest.TestCase):
@@ -440,6 +604,18 @@ class TestModelCapMode(unittest.TestCase):
         self.assertEqual(cap_mode_for_model("standard", "gemma3n:e4b"), "standard")
         self.assertEqual(cap_mode_for_model("fast",     "gemma3n:e4b"), "fast")
 
+    def test_gemma4_e2b_allows_detailed(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "gemma4:e2b"), "detailed")
+
+    def test_gemma4_e4b_allows_detailed(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "gemma4:e4b"), "detailed")
+
+    def test_gemma4_26b_allows_detailed(self):
+        from analyzer.config import cap_mode_for_model
+        self.assertEqual(cap_mode_for_model("detailed", "gemma4:26b"), "detailed")
+
     def test_qwen25_coder_7b_allows_detailed(self):
         from analyzer.config import cap_mode_for_model
         self.assertEqual(cap_mode_for_model("detailed", "qwen2.5-coder:7b"), "detailed")
@@ -458,6 +634,55 @@ class TestModelCapMode(unittest.TestCase):
         # qwen2.5:7b (base, not coder) should remain standard
         from analyzer.config import cap_mode_for_model
         self.assertEqual(cap_mode_for_model("detailed", "qwen2.5:7b"), "standard")
+
+
+class TestThinkingModelDetection(unittest.TestCase):
+    """Tests for analyzer.config.is_thinking_model."""
+
+    def test_gemma4_e2b_is_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertTrue(is_thinking_model("gemma4:e2b"))
+
+    def test_gemma4_e4b_is_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertTrue(is_thinking_model("gemma4:e4b"))
+
+    def test_gemma4_26b_is_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertTrue(is_thinking_model("gemma4:26b"))
+
+    def test_deepseek_r1_is_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertTrue(is_thinking_model("deepseek-r1:7b"))
+
+    def test_deepseek_r1_14b_is_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertTrue(is_thinking_model("deepseek-r1:14b"))
+
+    def test_qwq_is_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertTrue(is_thinking_model("qwq:32b"))
+
+    def test_llama31_not_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertFalse(is_thinking_model("llama3.1:8b"))
+
+    def test_gemma3_not_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertFalse(is_thinking_model("gemma3:12b"))
+
+    def test_empty_string_not_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertFalse(is_thinking_model(""))
+
+    def test_unknown_model_not_thinking(self):
+        from analyzer.config import is_thinking_model
+        self.assertFalse(is_thinking_model("unknownmodel:7b"))
+
+    def test_prefix_match_gemma4_variant(self):
+        # gemma4:latest should match because base name 'gemma4' is in set
+        from analyzer.config import is_thinking_model
+        self.assertTrue(is_thinking_model("gemma4:latest"))
 
 
 class TestBuildSystemPromptModes(unittest.TestCase):

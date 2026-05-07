@@ -4,6 +4,7 @@ analyzer/llm.py — LLM call helpers and public analyze_match entry point.
 
 import logging
 import os
+import re
 
 import anthropic
 import httpx
@@ -82,7 +83,7 @@ async def call_anthropic_once(resume: str, job_description: str) -> dict:
         f"→ anthropic response ({len(raw)} chars) "
         f"input_tokens={input_tokens} output_tokens={output_tokens}"
     )
-    _log_chunk(f"→ anthropic raw body:\n{raw[:800]}")
+    _log_chunk(f"→ anthropic raw body:\n{raw}")
     result = parse_response(raw, job_description, cfg)
     result["llm_provider"]  = "anthropic"
     result["llm_model"]     = model
@@ -130,7 +131,7 @@ async def call_openai_once(resume: str, job_description: str) -> dict:
         f"→ openai response ({len(raw)} chars) "
         f"prompt_tokens={input_tokens} completion_tokens={output_tokens}"
     )
-    _log_chunk(f"→ openai raw body:\n{raw[:800]}")
+    _log_chunk(f"→ openai raw body:\n{raw}")
     result = parse_response(raw, job_description, cfg)
     result["llm_provider"]  = "openai"
     result["llm_model"]     = model
@@ -182,7 +183,7 @@ async def call_gemini_once(resume: str, job_description: str) -> dict:
         f"→ gemini response ({len(raw)} chars) "
         f"prompt_tokens={input_tokens} output_tokens={output_tokens}"
     )
-    _log_chunk(f"→ gemini raw body:\n{raw[:800]}")
+    _log_chunk(f"→ gemini raw body:\n{raw}")
     result = parse_response(raw, job_description, cfg)
     result["llm_provider"]  = "gemini"
     result["llm_model"]     = model
@@ -228,7 +229,7 @@ async def call_ollama_once(resume: str, job_description: str, resume_snippet: bo
     # Calculate how much room is left for the model to generate output
     available_for_output = context_window - prompt_tokens - 512
 
-    logger.debug(
+    _log_chunk(
         f"→ context pre-flight: model={model} context={context_window} "
         f"prompt_chars={len(full_prompt)} prompt_tokens~{prompt_tokens} "
         f"available={available_for_output} min_required={MIN_OUTPUT} "
@@ -276,17 +277,47 @@ async def call_ollama_once(resume: str, job_description: str, resume_snippet: bo
                     f"(overhead~{overhead_buf} tokens, new available={new_available})"
                 )
 
+    from analyzer.config import is_thinking_model
+    if is_thinking_model(model):
+        # Thinking models need a larger output budget — the detailed JSON schema
+        # with 15 matched skills, snippets, missing skills, and suggestions
+        # easily exceeds 4096 tokens.
+        desired_output = min(desired_output * 2, 8192)
+        MIN_OUTPUT = int(desired_output * 0.80)
+        # Also reduce snippet lengths and counts to keep output manageable.
+        # Even with 8192 tokens, long snippets across 15 skills exhaust the budget.
+        cfg = dict(cfg)
+        cfg["snippet_len"] = min(cfg.get("snippet_len", 100), 60)
+        cfg["max_matched"] = min(cfg.get("max_matched", 15), 10)
+        cfg["max_missing"] = min(cfg.get("max_missing", 10), 7)
+
+        # Thinking models tend to produce prose despite JSON instructions.
+        # Prepend a hard constraint that overrides the conversational tendency.
+        system_prompt = (
+            "CRITICAL INSTRUCTION: Your entire response must be a single valid JSON object. "
+            "Do NOT write any prose, markdown, headers, bullet points, or explanations. "
+            "Do NOT start with 'Based on' or any other sentence. "
+            "Start your response with '{' and end with '}'. Nothing else.\n\n"
+            + system_prompt
+        )
+
+    user_prompt = build_user_prompt(resume, job_description)
+    if is_thinking_model(model):
+        user_prompt += "\n\nRemember: respond with ONLY a JSON object starting with '{'. No prose."
+
     num_predict = safe_num_predict(full_prompt, model_name=model,
                                    desired_output=desired_output)
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": build_user_prompt(resume, job_description)},
+            {"role": "user",   "content": user_prompt},
         ],
         "stream":  False,
-        "options": {"temperature": 0.2, "num_predict": num_predict},
+        "options": {"temperature": 0.2, "num_predict": num_predict, "think": False},
     }
+    if is_thinking_model(model):
+        payload["format"] = "json"
     timeout = int(os.getenv("OLLAMA_TIMEOUT", "600"))
 
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -302,16 +333,20 @@ async def call_ollama_once(resume: str, job_description: str, resume_snippet: bo
             raise ValueError(f"Ollama error: {e.response.status_code} — {e.response.text}")
 
     resp_json = resp.json()
-    raw       = resp_json["message"]["content"]
+    msg = resp_json.get("message", {})
+    content  = msg.get("content", "")
+    thinking = msg.get("thinking", "")
+    raw = content or thinking or ""
+    raw = _strip_thinking(raw)
 
-    # Log token usage from Ollama response if available
     eval_count   = resp_json.get("eval_count", "?")
     prompt_eval  = resp_json.get("prompt_eval_count", "?")
     logger.info(
         f"→ raw Ollama response ({len(raw)} chars) "
+        f"content={len(content)} thinking={len(thinking)} "
         f"prompt_tokens={prompt_eval} output_tokens={eval_count}"
     )
-    logger.debug(f"→ raw Ollama response body:\n{raw[:2000]}")
+    _log_chunk(f"→ raw Ollama response body:\n{raw}")
 
     result = parse_response(raw, job_description, cfg)
     result["llm_provider"]  = "ollama"
@@ -341,7 +376,7 @@ async def _call_chunk(
             {"role": "user",   "content": user_prompt},
         ],
         "stream":  False,
-        "options": {"temperature": 0.1, "num_predict": num_predict},
+        "options": {"temperature": 0.1, "num_predict": num_predict, "think": False},
     }
     timeout = int(os.getenv("OLLAMA_TIMEOUT", "600"))
     try:
@@ -349,14 +384,15 @@ async def _call_chunk(
             resp = await client.post(f"{ollama_base_url()}/api/chat", json=payload)
             resp.raise_for_status()
         resp_json   = resp.json()
-        raw         = resp_json["message"]["content"]
+        msg         = resp_json.get("message", {})
+        raw         = msg.get("content") or msg.get("thinking") or ""
         eval_count  = resp_json.get("eval_count", "?")
         prompt_eval = resp_json.get("prompt_eval_count", "?")
         logger.info(
             f"→ chunk {chunk_name} response ({len(raw)} chars) "
             f"prompt_tokens={prompt_eval} output_tokens={eval_count}"
         )
-        _log_chunk(f"→ chunk {chunk_name} raw body:\n{raw[:800]}")
+        _log_chunk(f"→ chunk {chunk_name} raw body:\n{raw}")
         return raw
     except httpx.ConnectError:
         logger.error(f"✗ chunk {chunk_name}: cannot connect to Ollama")
@@ -367,6 +403,27 @@ async def _call_chunk(
     except Exception as e:
         logger.error(f"✗ chunk {chunk_name}: unexpected error: {e}")
         return None
+
+
+def _strip_thinking(raw: str | None) -> str:
+    """
+    Strip Ollama thinking-model preamble from raw response content.
+    Gemma 4 and other thinking models prepend 'Thinking Process:...' or
+    '<think>...</think>' blocks before the actual JSON output.
+    """
+    if not raw:
+        return raw or ""
+    import re as _re
+    # Strip <think>...</think> blocks
+    raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL)
+    # Strip "Thinking Process:" narrative blocks — everything up to the first { or [
+    m = _re.search(r"[{\[]", raw)
+    if m and m.start() > 0:
+        preamble = raw[:m.start()]
+        # Only strip if it looks like a thinking preamble, not legitimate text
+        if any(marker in preamble for marker in ("Thinking Process", "thinking process", "Let me analyze", "I need to")):
+            raw = raw[m.start():]
+    return raw.strip()
 
 
 def _parse_chunk(raw: str | None, key: str, chunk_name: str) -> list | dict | None:
@@ -383,6 +440,7 @@ def _parse_chunk(raw: str | None, key: str, chunk_name: str) -> list | dict | No
     if not raw:
         return None
 
+    raw     = _strip_thinking(raw)
     cleaned = re.sub(r"```(?:json)?", "", raw).strip()
 
     attempts = [
@@ -436,6 +494,7 @@ def _parse_score_chunk(raw: str | None) -> tuple[int | None, str]:
     if not raw:
         return None, ""
 
+    raw     = _strip_thinking(raw)
     cleaned = re.sub(r"```(?:json)?", "", raw).strip()
 
     attempts = [
@@ -465,6 +524,181 @@ def _parse_score_chunk(raw: str | None) -> tuple[int | None, str]:
     logger.warning("✗ chunk score: could not parse JSON after all repair passes")
     _log_chunk(f"→ chunk score raw:\n{cleaned[:600]}")
     return None, ""
+
+
+async def call_ollama_thinking(resume: str, job_description: str) -> dict:
+    """
+    Two-call analysis path for thinking models (Gemma 4, DeepSeek-R1, etc.).
+
+    Thinking models stop generating JSON early when given a large schema.
+    Splitting into two focused calls keeps each response within the model's
+    self-imposed completion limit:
+      Call A — score + reasoning + matched_skills
+      Call B — missing_skills + suggestions
+    Results are merged into the standard analysis dict.
+    """
+    cfg   = get_mode_config()
+    model = ollama_model()
+
+    # Compact config for thinking models — shorter snippets, fewer items
+    cfg = dict(cfg)
+    cfg["snippet_len"] = min(cfg.get("snippet_len", 100), 60)
+    cfg["max_matched"] = min(cfg.get("max_matched", 15), 10)
+    cfg["max_missing"] = min(cfg.get("max_missing", 10), 7)
+
+    slen     = cfg["snippet_len"]
+    mmatched = cfg["max_matched"]
+    mmissing = cfg["max_missing"]
+    timeout  = int(os.getenv("OLLAMA_TIMEOUT", "600"))
+    user_msg = build_user_prompt(resume, job_description)
+    user_msg_b = user_msg + "\n\nRemember: respond with ONLY a JSON object starting with '{'. No prose."
+
+    thinking_prefix = (
+        "CRITICAL INSTRUCTION: Your entire response must be a single valid JSON object. "
+        "Do NOT write any prose, markdown, headers, or explanations. "
+        "Start your response with '{' and end with '}'. Nothing else.\n\n"
+    )
+
+    # ── Call A: score + reasoning + matched_skills ────────────────────────────
+    sys_a = thinking_prefix + (
+        f"You are an expert technical recruiter. Evaluate resume vs job description.\n\n"
+        f"Return ONLY this JSON with at most {mmatched} matched skills:\n"
+        f'{{"score": <1-5>, "reasoning": "<2 sentences>", '
+        f'"matched_skills": [{{"skill": "...", "match_type": "exact|partial|inferred", '
+        f'"jd_snippet": "<{slen} chars max>", "resume_snippet": "<{slen} chars max>"}}]}}'
+    )
+    num_predict_a = safe_num_predict(
+        sys_a + user_msg_b, model_name=model, desired_output=2000
+    )
+    payload_a = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys_a},
+            {"role": "user",   "content": user_msg_b},
+        ],
+        "stream":  False,
+        "format":  "json",
+        "options": {"temperature": 0.2, "num_predict": num_predict_a, "think": False},
+    }
+
+    # ── Call B: missing_skills + suggestions ──────────────────────────────────
+    sys_b = thinking_prefix + (
+        f"You are an expert technical recruiter. Evaluate resume vs job description.\n\n"
+        f"Return ONLY this JSON with at most {mmissing} missing skills and 3 suggestions:\n"
+        f'{{"missing_skills": [{{"skill": "...", "severity": "blocker|major|minor", '
+        f'"requirement_type": "hard|preferred|bonus", "jd_snippet": "<{slen} chars max>"}}], '
+        f'"suggestions": [{{"title": "...", "detail": "..."}}]}}'
+    )
+    num_predict_b = safe_num_predict(
+        sys_b + user_msg_b, model_name=model, desired_output=2000
+    )
+    payload_b = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys_b},
+            {"role": "user",   "content": user_msg_b},
+        ],
+        "stream":  False,
+        "format":  "json",
+        "options": {"temperature": 0.2, "num_predict": num_predict_b, "think": False},
+    }
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        # Run both calls sequentially — Ollama processes one at a time anyway
+        resp_a = await client.post(f"{ollama_base_url()}/api/chat", json=payload_a)
+        resp_a.raise_for_status()
+        resp_a_json = resp_a.json()
+        raw_a     = resp_a_json.get("message", {}).get("content", "")
+        think_a   = resp_a_json.get("message", {}).get("thinking", "")
+        raw_a     = _strip_thinking(raw_a)
+        logger.info(f"→ thinking call A: {len(raw_a)} chars  thinking={len(think_a)} chars")
+        _log_chunk(f"→ thinking call A body:\n{raw_a}")
+        _log_chunk(f"→ thinking call A reasoning:\n{think_a}")
+
+        resp_b = await client.post(f"{ollama_base_url()}/api/chat", json=payload_b)
+        resp_b.raise_for_status()
+        resp_b_json = resp_b.json()
+        raw_b     = resp_b_json.get("message", {}).get("content", "")
+        think_b   = resp_b_json.get("message", {}).get("thinking", "")
+        raw_b     = _strip_thinking(raw_b)
+        logger.info(f"→ thinking call B: {len(raw_b)} chars  thinking={len(think_b)} chars")
+        _log_chunk(f"→ thinking call B body:\n{raw_b}")
+        _log_chunk(f"→ thinking call B reasoning:\n{think_b}")
+
+    # ── Parse and merge ───────────────────────────────────────────────────────
+    import json as _json
+    from analyzer.skills_helpers import parse_matched_skills, parse_missing_skills, parse_suggestions, keyword_boost
+    from analyzer.penalties import compute_adjusted_score
+
+    result_a: dict = {}
+    result_b: dict = {}
+
+    for raw, target in [(raw_a, "A"), (raw_b, "B")]:
+        try:
+            cleaned = re.sub(r"```(?:json)?", "", raw).strip()
+            parsed  = _json.loads(cleaned)
+            if target == "A":
+                result_a = parsed
+            else:
+                result_b = parsed
+        except Exception:
+            try:
+                repaired = repair_truncated_json(raw)
+                parsed   = _json.loads(repaired)
+                if target == "A":
+                    result_a = parsed
+                else:
+                    result_b = parsed
+            except Exception as e:
+                logger.warning(f"✗ thinking call {target} parse failed: {e}")
+
+    score     = result_a.get("score")
+    reasoning = result_a.get("reasoning", "")
+    if score is None:
+        raise ValueError("Thinking analysis failed: could not get score from model")
+
+    try:
+        score = int(float(str(score)))
+        score = max(1, min(5, score))
+    except Exception:
+        raise ValueError(f"Thinking analysis failed: invalid score {score!r}")
+
+    if not reasoning.strip():
+        reasoning = "Analysis completed. Review matched and missing skills above."
+
+    matched     = result_a.get("matched_skills", [])
+    missing     = result_b.get("missing_skills", [])
+    suggestions = result_b.get("suggestions", [])
+
+    # ── Apply penalty pipeline (same as call_ollama_chunked) ──────────────────
+    parsed_matched     = parse_matched_skills(matched)[:cfg["max_matched"]]
+    parsed_missing     = parse_missing_skills(missing)[:cfg["max_missing"]]
+    parsed_missing     = keyword_boost(parsed_missing, job_description)
+    parsed_suggestions = parse_suggestions(suggestions) if suggestions else []
+
+    adjusted_score, penalty_breakdown = compute_adjusted_score(score, parsed_missing)
+
+    result = {
+        "score":             score,
+        "adjusted_score":    adjusted_score,
+        "penalty_breakdown": penalty_breakdown,
+        "matched_skills":    parsed_matched,
+        "missing_skills":    parsed_missing,
+        "reasoning":         reasoning,
+        "suggestions":       parsed_suggestions,
+        "llm_provider":      "ollama",
+        "llm_model":         model,
+        "analysis_mode":     cfg.get("mode", "detailed"),
+        "retry_count":       0,
+        "used_fallback":     False,
+        "validation_errors": "",
+    }
+
+    corrections = auto_correct_llm_output(result)
+    if corrections:
+        logger.info(f"→ auto-corrected thinking result: {corrections}")
+
+    return result
 
 
 async def call_ollama_chunked(resume: str, job_description: str) -> dict:
@@ -501,7 +735,10 @@ async def call_ollama_chunked(resume: str, job_description: str) -> dict:
 
     # ── Chunk 1: score + reasoning ────────────────────────────────────────────
     sys1 = build_chunk1_prompt(cfg, actual_mode)
-    raw1 = await _call_chunk(sys1, user_prompt, model, num_predict=350, chunk_name="1/score+reasoning")
+    # Use a larger budget for chunk 1 — thinking models consume tokens on
+    # reasoning before producing JSON, so 350 is too tight.
+    chunk1_predict = 2000
+    raw1 = await _call_chunk(sys1, user_prompt, model, num_predict=chunk1_predict, chunk_name="1/score+reasoning")
     score, reasoning = _parse_score_chunk(raw1)
 
     if score is None:
@@ -590,13 +827,19 @@ async def analyze_match(resume: str, job_description: str, provider: str = "anth
             )
 
         try:
-            logger.debug(
+            _log_chunk(
                 f"→ attempt {attempt + 1}/{MAX_RETRIES} provider={provider} "
                 f"resume={len(resume)} chars jd={len(job_description)} chars"
             )
             import analyzer.llm as _self
             if provider == "ollama":
-                result = await _self.call_ollama_chunked(resume, job_description)
+                from analyzer.config import is_thinking_model
+                current_model = ollama_model()
+                if is_thinking_model(current_model):
+                    logger.info(f"→ Routing thinking model {current_model!r} to thinking path")
+                    result = await _self.call_ollama_thinking(resume, job_description)
+                else:
+                    result = await _self.call_ollama_chunked(resume, job_description)
             elif provider == "openai":
                 result = await _self.call_openai_once(resume, job_description)
             elif provider == "gemini":

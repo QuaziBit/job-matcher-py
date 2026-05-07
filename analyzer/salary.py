@@ -11,6 +11,7 @@ import anthropic
 import httpx
 
 from analyzer.config import ANTHROPIC_MODEL, ollama_base_url, ollama_model, anthropic_model, openai_model, gemini_model
+from analyzer.llm import _strip_thinking
 
 logger = logging.getLogger("analyzer.salary")
 
@@ -157,24 +158,36 @@ def _parse_salary_response(raw: str) -> dict:
 
 # ── Shared LLM caller ─────────────────────────────────────────────────────────
 
-async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1) -> tuple:
+async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1, model: str = "") -> tuple:
     """
     Call the configured LLM for salary prompt.
     Returns (raw_response, context) for retry use.
     Supports: anthropic, openai, gemini, ollama.
     """
     if provider == "ollama":
-        model   = ollama_model()
+        from analyzer.config import is_thinking_model
+        model   = model or ollama_model()
         timeout = int(os.getenv("OLLAMA_TIMEOUT", "600"))
+
+        system_msg = "You are a compensation analyst. Always respond with valid JSON only."
+        if is_thinking_model(model):
+            system_msg = (
+                "CRITICAL: Respond with ONLY a valid JSON object. "
+                "No prose, no markdown, no explanations. Start with '{' end with '}'.\n\n"
+                + system_msg
+            )
+
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "You are a compensation analyst. Always respond with valid JSON only."},
+                {"role": "system", "content": system_msg},
                 {"role": "user",   "content": prompt},
             ],
             "stream":  False,
-            "options": {"temperature": temperature, "num_predict": 400},
+            "options": {"temperature": temperature, "num_predict": 800 if is_thinking_model(model) else 400, "think": False},
         }
+        if is_thinking_model(model):
+            payload["format"] = "json"
         logger.info(f"→ salary ollama request: model={model} temperature={temperature}")
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
@@ -188,11 +201,13 @@ async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1)
             except httpx.HTTPStatusError as e:
                 raise ValueError(f"Ollama error: {e.response.status_code} — {e.response.text}")
         resp_json   = resp.json()
-        raw         = resp_json["message"]["content"]
+        msg         = resp_json.get("message", {})
+        raw         = msg.get("content") or msg.get("thinking") or ""
+        raw         = _strip_thinking(raw)
         eval_count  = resp_json.get("eval_count", "?")
         prompt_eval = resp_json.get("prompt_eval_count", "?")
         logger.info(f"→ salary ollama response ({len(raw)} chars) prompt_tokens={prompt_eval} output_tokens={eval_count}")
-        _log_salary(f"→ salary ollama raw body:\n{raw[:400]}")
+        _log_salary(f"→ salary ollama raw body:\n{raw}")
         return raw, payload
 
     elif provider == "openai":
@@ -222,7 +237,7 @@ async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1)
             f"prompt_tokens={getattr(usage, 'prompt_tokens', '?')} "
             f"completion_tokens={getattr(usage, 'completion_tokens', '?')}"
         )
-        _log_salary(f"→ salary openai raw body:\n{raw[:400]}")
+        _log_salary(f"→ salary openai raw body:\n{raw}")
         return raw, client
 
     elif provider == "gemini":
@@ -254,7 +269,7 @@ async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1)
             f"prompt_tokens={getattr(usage, 'prompt_token_count', '?') if usage else '?'} "
             f"output_tokens={getattr(usage, 'candidates_token_count', '?') if usage else '?'}"
         )
-        _log_salary(f"→ salary gemini raw body:\n{raw[:400]}")
+        _log_salary(f"→ salary gemini raw body:\n{raw}")
         return raw, client
 
     else:  # anthropic (default)
@@ -277,7 +292,7 @@ async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1)
             f"→ salary anthropic response ({len(raw)} chars) "
             f"input_tokens={input_tokens} output_tokens={output_tokens}"
         )
-        _log_salary(f"→ salary anthropic raw body:\n{raw[:400]}")
+        _log_salary(f"→ salary anthropic raw body:\n{raw}")
         return raw, client
 
 
@@ -300,6 +315,7 @@ async def estimate_salary(
     location: str,
     job_description: str,
     provider: str = "anthropic",
+    model: str = "",
     _skip_salary_check: bool = False,
 ) -> dict:
     """
@@ -312,9 +328,9 @@ async def estimate_salary(
         raise ValueError("Job description already contains salary information")
 
     prompt     = _build_salary_prompt(title, company, location, job_description)
-    model_name = _get_salary_model_name(provider)
+    model_name = model or _get_salary_model_name(provider)
 
-    raw, ctx = await _call_salary_llm(prompt, provider, temperature=0.1)
+    raw, ctx = await _call_salary_llm(prompt, provider, temperature=0.1, model=model)
 
     for attempt in range(2):
         try:
@@ -327,7 +343,7 @@ async def estimate_salary(
                 logger.warning(f"→ {model_name} salary parse failed (attempt 1), raw: {raw[:300]!r}")
                 logger.warning("→ retrying...")
                 try:
-                    raw, ctx = await _call_salary_llm(prompt, provider, temperature=0.1)
+                    raw, ctx = await _call_salary_llm(prompt, provider, temperature=0.1, model=model)
                 except Exception as retry_exc:
                     raise ValueError(
                         f"{model_name} could not estimate salary — retry also failed. "
@@ -346,6 +362,7 @@ async def extract_salary(
     location: str,
     job_description: str,
     provider: str = "anthropic",
+    model: str = "",
 ) -> dict:
     """
     Extract explicitly posted salary from a job description.
@@ -376,8 +393,8 @@ async def extract_salary(
         ]),
     ])
 
-    model_name = _get_salary_model_name(provider)
-    raw, ctx   = await _call_salary_llm(prompt, provider, temperature=0.0)
+    model_name = model or _get_salary_model_name(provider)
+    raw, ctx   = await _call_salary_llm(prompt, provider, temperature=0.0, model=model)
 
     for attempt in range(2):
         try:
@@ -391,7 +408,7 @@ async def extract_salary(
                 logger.warning(f"→ {model_name} salary extraction parse failed (attempt 1), raw: {raw[:300]!r}")
                 logger.warning("→ retrying...")
                 try:
-                    raw, ctx = await _call_salary_llm(prompt, provider, temperature=0.0)
+                    raw, ctx = await _call_salary_llm(prompt, provider, temperature=0.0, model=model)
                 except Exception as retry_exc:
                     raise ValueError(
                         f"{model_name} could not extract salary — retry also failed. "

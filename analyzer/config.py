@@ -86,6 +86,11 @@ MODEL_MAX_MODE = {
     "gemma3:27b":    "detailed",
     # Gemma 3n
     "gemma3n:e4b":   "detailed",
+    # Gemma 4
+    "gemma4:e2b":    "detailed",
+    "gemma4:e4b":    "detailed",
+    "gemma4:26b":    "detailed",
+    "gemma4:31b":    "detailed",
     # Mistral — standard is safe
     "mistral:7b":    "standard",
     "mistral:latest": "standard",
@@ -110,6 +115,36 @@ MODEL_MAX_MODE = {
     "qwen2.5-coder:14b": "detailed",
     "qwen2.5-coder:32b": "detailed",
 }
+
+# Models that use a built-in reasoning/thinking phase before producing output.
+# These require the single-call path (call_ollama_once) instead of chunked,
+# because the thinking tokens consume the per-chunk budget before JSON is produced.
+THINKING_MODELS: set[str] = {
+    "gemma4:e2b",
+    "gemma4:e4b",
+    "gemma4:26b",
+    "gemma4:31b",
+    "gemma4:latest",
+    "deepseek-r1:7b",
+    "deepseek-r1:14b",
+    "deepseek-r1:32b",
+    "deepseek-r1:70b",
+    "deepseek-r1:671b",
+    "qwq:32b",
+}
+
+
+def is_thinking_model(model_name: str) -> bool:
+    """
+    Return True if the model uses a built-in thinking/reasoning phase.
+    Checks exact match first, then prefix match on base name before ':'.
+    """
+    if not model_name:
+        return False
+    if model_name in THINKING_MODELS:
+        return True
+    base = model_name.split(":")[0].lower()
+    return any(m.split(":")[0].lower() == base for m in THINKING_MODELS)
 
 # Mode ordering for comparisons
 _MODE_ORDER = {"fast": 0, "standard": 1, "detailed": 2}

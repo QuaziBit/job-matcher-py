@@ -600,6 +600,7 @@ async def analyze_job(
 async def estimate_job_salary(
     job_id: int,
     provider: str = Form("anthropic"),
+    model: str = Form(""),
     db: aiosqlite.Connection = Depends(get_db),
 ):
     """Estimate or extract salary for a job using the configured LLM."""
@@ -639,6 +640,7 @@ async def estimate_job_salary(
                     location=job["location"] or "",
                     job_description=job["raw_description"] or "",
                     provider=provider,
+                    model=model,
                 )
             except ValueError:
                 logger.warning(f"→ extract_salary failed for job {job_id}, falling back to estimate_salary")
@@ -648,6 +650,7 @@ async def estimate_job_salary(
                     location=job["location"] or "",
                     job_description=job["raw_description"] or "",
                     provider=provider,
+                    model=model,
                     _skip_salary_check=True,
                 )
                 result["source"] = "estimated"
@@ -658,6 +661,7 @@ async def estimate_job_salary(
                 location=job["location"] or "",
                 job_description=job["raw_description"] or "",
                 provider=provider,
+                model=model,
             )
             result["source"] = "estimated"
     except ValueError as e:

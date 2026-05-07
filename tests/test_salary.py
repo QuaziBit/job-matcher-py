@@ -219,6 +219,106 @@ class TestEstimateSalaryOllama(unittest.TestCase):
                 run(estimate_salary("Dev", "Co", "NYC", MOCK_JOB_NO_SALARY, "ollama"))
         self.assertIn("Ollama", str(ctx.exception))
 
+    def test_estimate_salary_ollama_payload_has_think_false(self):
+        """Salary Ollama requests must include think:False to suppress reasoning tokens."""
+        from analyzer import estimate_salary
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": MOCK_SALARY_RESPONSE}}
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        with patch("analyzer.salary.httpx.AsyncClient", return_value=mock_client):
+            run(estimate_salary(
+                title="Python Dev", company="Co", location="Remote",
+                job_description=MOCK_JOB_NO_SALARY, provider="ollama",
+            ))
+
+        call_kwargs = mock_client.post.call_args
+        payload = call_kwargs[1].get("json") or call_kwargs[0][1]
+        options = payload.get("options", {})
+        self.assertIn("think", options)
+        self.assertFalse(options["think"], "think must be False to suppress Gemma4 reasoning tokens")
+
+    def test_estimate_salary_thinking_model_has_format_json(self):
+        """Thinking model salary requests must include format:json and larger num_predict."""
+        from analyzer import estimate_salary
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": MOCK_SALARY_RESPONSE}}
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        with patch("analyzer.salary.httpx.AsyncClient", return_value=mock_client):
+            run(estimate_salary(
+                title="Python Dev", company="Co", location="Remote",
+                job_description=MOCK_JOB_NO_SALARY, provider="ollama",
+                model="gemma4:e4b",
+            ))
+
+        call_kwargs = mock_client.post.call_args
+        payload = call_kwargs[1].get("json") or call_kwargs[0][1]
+        self.assertEqual(payload.get("format"), "json")
+        self.assertGreaterEqual(payload["options"]["num_predict"], 800)
+
+    def test_estimate_salary_non_thinking_model_no_format_json(self):
+        """Non-thinking models must NOT have format:json and use standard num_predict."""
+        from analyzer import estimate_salary
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": MOCK_SALARY_RESPONSE}}
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        with patch("analyzer.salary.httpx.AsyncClient", return_value=mock_client):
+            run(estimate_salary(
+                title="Python Dev", company="Co", location="Remote",
+                job_description=MOCK_JOB_NO_SALARY, provider="ollama",
+                model="llama3.1:8b",
+            ))
+
+        call_kwargs = mock_client.post.call_args
+        payload = call_kwargs[1].get("json") or call_kwargs[0][1]
+        self.assertNotIn("format", payload)
+        self.assertEqual(payload["options"]["num_predict"], 400)
+
+    def test_estimate_salary_ollama_uses_passed_model(self):
+        """When model= is passed, Ollama payload should use that model not the env var."""
+        from analyzer import estimate_salary
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": MOCK_SALARY_RESPONSE}}
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_resp)
+
+        with patch("analyzer.salary.httpx.AsyncClient", return_value=mock_client):
+            result = run(estimate_salary(
+                title="Python Dev", company="Co", location="Remote",
+                job_description=MOCK_JOB_NO_SALARY, provider="ollama",
+                model="gemma4:e4b",
+            ))
+
+        call_kwargs = mock_client.post.call_args
+        payload = call_kwargs[1].get("json") or call_kwargs[0][1]
+        self.assertEqual(payload["model"], "gemma4:e4b")
+        self.assertEqual(result["llm_model"], "gemma4:e4b")
+
 
 class TestSalaryAPIEndpoints(unittest.IsolatedAsyncioTestCase):
     """API endpoint tests for salary estimation routes."""
@@ -310,7 +410,31 @@ class TestSalaryAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["source"], "posted")
         self.assertEqual(data["min"], 130000)
 
-    async def test_estimate_salary_404_for_missing_job(self):
+    async def test_estimate_salary_endpoint_passes_model_to_llm(self):
+        """Endpoint should pass the model form field to estimate_salary."""
+        jid = await self._add_job()
+
+        mock_return = {
+            "min": 120000, "max": 150000, "currency": "USD",
+            "period": "annual", "confidence": "medium",
+            "signals": [], "llm_provider": "ollama",
+            "llm_model": "gemma4:e4b", "source": "estimated",
+        }
+        with patch("main.estimate_salary", new_callable=AsyncMock) as mock_est, \
+             patch("main.extract_salary",  new_callable=AsyncMock) as mock_ext, \
+             patch("main._ollama_model",   return_value="gemma4:e4b"):
+            mock_est.return_value = mock_return
+            mock_ext.return_value = mock_return
+            resp = await self.client.post(
+                f"/api/jobs/{jid}/estimate-salary",
+                data={"provider": "ollama", "model": "gemma4:e4b"},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        called = mock_est if mock_est.called else (mock_ext if mock_ext.called else None)
+        self.assertIsNotNone(called, "Neither estimate_salary nor extract_salary was called")
+        _, kwargs = called.call_args
+        self.assertEqual(kwargs.get("model"), "gemma4:e4b")
         r = await self.client.post("/api/jobs/99999/estimate-salary",
                                    data={"provider": "anthropic"})
         self.assertEqual(r.status_code, 404)

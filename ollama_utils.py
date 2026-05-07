@@ -22,6 +22,14 @@ MODEL_CONTEXT_WINDOWS = {
     "gemma3:4b":         32768,
     "gemma3:12b":        32768,
     "gemma3:27b":        32768,
+    # Gemma 3n family
+    "gemma3n:e2b":      131072,
+    "gemma3n:e4b":      131072,
+    # Gemma 4 family
+    "gemma4:e2b":       131072,
+    "gemma4:e4b":       131072,
+    "gemma4:26b":       131072,
+    "gemma4:31b":       131072,
     # Mistral family
     "mistral:7b":         8192,
     "mistral:latest":     8192,
