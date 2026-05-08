@@ -1417,10 +1417,14 @@ async function estimateSalary(jobId) {
   if (btn) { btn.disabled = true; btn.innerHTML = TMPL.spinner('Estimating\u2026'); }
 
   const provider = document.querySelector('input[name="provider"]:checked')?.value || 'anthropic';
-  const modelEl  = document.querySelector('select[name="model"]') || document.querySelector('select[name="ollama_model"]');
+  const ollamaModelEl = document.getElementById('ollama-model-select');
+  const cloudModelEl  = document.getElementById('cloud-model-select');
+  const selectedModel = provider === 'ollama'
+    ? (ollamaModelEl?.value || '')
+    : (cloudModelEl?.value || '');
   const fd = new FormData();
   fd.append('provider', provider);
-  if (modelEl && modelEl.value) fd.append('model', modelEl.value);
+  if (selectedModel) fd.append('model', selectedModel);
 
   try {
     const res  = await fetch(`/api/jobs/${jobId}/estimate-salary`, { method: 'POST', body: fd });
@@ -1459,10 +1463,14 @@ async function rerunSalaryEstimate(jobId) {
   catch(e) { logErr('rerunSalaryEstimate', 'DELETE threw:', e); }
 
   const provider = document.querySelector('input[name="provider"]:checked')?.value || 'anthropic';
-  const modelEl  = document.querySelector('select[name="model"]') || document.querySelector('select[name="ollama_model"]');
+  const ollamaModelEl = document.getElementById('ollama-model-select');
+  const cloudModelEl  = document.getElementById('cloud-model-select');
+  const selectedModel = provider === 'ollama'
+    ? (ollamaModelEl?.value || '')
+    : (cloudModelEl?.value || '');
   const fd = new FormData();
   fd.append('provider', provider);
-  if (modelEl && modelEl.value) fd.append('model', modelEl.value);
+  if (selectedModel) fd.append('model', selectedModel);
 
   try {
     const res  = await fetch(`/api/jobs/${jobId}/estimate-salary`, { method: 'POST', body: fd });
