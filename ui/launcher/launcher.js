@@ -47,10 +47,13 @@ function applyLayout() {
 
 // Sync form values from vertical → horizontal when switching to horizontal
 function syncToHorizontal() {
-  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout','show_more_logs'];
+  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout'];
   fields.forEach(id => {
     const src = $(id); const dst = $('h-' + id);
     if (src && dst) dst.value = src.value;
+  });
+  [['show_more_logs','h-show_more_logs'],['mx_auto_check','h-mx_auto_check']].forEach(([a,b]) => {
+    const src = $(a), dst = $(b); if (src && dst) dst.checked = src.checked;
   });
   // :checked may not match on fresh page load — fall back to HTML checked attribute
   let vMode = document.querySelector('input[name="analysis_mode"]:checked');
@@ -63,10 +66,13 @@ function syncToHorizontal() {
 
 // Sync form values from horizontal → vertical when switching to vertical
 function syncToVertical() {
-  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout','show_more_logs'];
+  const fields = ['port','host','db_path','anthropic_api_key','openai_api_key','gemini_api_key','ollama_base_url','ollama_model','ollama_timeout'];
   fields.forEach(id => {
     const src = $('h-' + id); const dst = $(id);
     if (src && dst) dst.value = src.value;
+  });
+  [['h-show_more_logs','show_more_logs'],['h-mx_auto_check','mx_auto_check']].forEach(([a,b]) => {
+    const src = $(a), dst = $(b); if (src && dst) dst.checked = src.checked;
   });
   const hMode = document.querySelector('input[name="h-analysis_mode"]:checked');
   if (hMode) {
@@ -159,6 +165,8 @@ function buildFormData() {
   fd.append('gemini_api_key',   ($(pfx + 'gemini_api_key')   || {value:''}).value);
   const smlEl = $(pfx + 'show_more_logs');
   if (smlEl && smlEl.checked) fd.append('show_more_logs', 'true');
+  const mxEl = $(pfx + 'mx_auto_check');
+  if (mxEl && mxEl.checked) fd.append('mx_auto_check', 'true');
   fd.append('ollama_base_url',   ($(pfx + 'ollama_base_url')   || {value:''}).value);
   fd.append('ollama_model',      ($(pfx + 'ollama_model')      || {value:''}).value);
   fd.append('ollama_timeout',    ($(pfx + 'ollama_timeout')    || {value:''}).value);

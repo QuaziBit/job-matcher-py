@@ -1,0 +1,30 @@
+﻿# Environment & secrets — exclude from AI context / indexing parity
+.env
+**/.env
+.env.*
+**/.env.*
+*.env
+.envrc
+
+# Certificates / keys
+*.pem
+*.key
+*.crt
+*.p12
+
+# SSH
+.ssh/
+
+# Configs with secrets
+cfg/config.json
+config.production.json
+secrets.json
+
+# Cloud credential dirs (if present in-repo)
+.aws/
+.azure/
+.gcp/
+
+# Package registry auth (if present in-repo)
+.npmrc
+.pypirc
