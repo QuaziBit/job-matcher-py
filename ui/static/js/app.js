@@ -2351,6 +2351,64 @@ const GENERIC_NAME_PATTERNS = [
   /^careers$/i, /^jobs$/i, /^noreply$/i,
 ];
 
+// MX check results: domain → { has_mx: bool, checked: bool }
+const _mxResults = {};
+
+async function runManualMXCheck() {
+  const btn = document.getElementById('mx-check-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '🔍 Checking…'; }
+  await checkRecruiterMX(_vettingData ? (_vettingData.recruiters || []) : []);
+  if (btn) { btn.disabled = false; btn.textContent = '🔍 Check MX Records'; }
+}
+
+async function checkRecruiterEmailMX(email, btnId) {
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const fd = new FormData();
+    fd.append('email', email);
+    const res  = await fetch('/api/email/validate-domain', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.domain) {
+      _mxResults[data.domain] = { has_mx: data.has_mx, checked: true };
+    }
+    log('checkRecruiterEmailMX', `${email} has_mx=${data.has_mx}`);
+  } catch(e) {
+    logErr('checkRecruiterEmailMX', 'fetch threw:', e);
+  }
+  applyVettingFilters();
+}
+
+async function checkRecruiterMX(recruiters) {
+  // Collect unique domains from recruiter emails
+  const domains = new Set();
+  for (const r of recruiters) {
+    if (r.email && r.email.includes('@')) {
+      const domain = r.email.split('@').pop().toLowerCase().trim();
+      if (domain) domains.add(domain);
+    }
+  }
+  log('checkRecruiterMX', `found ${recruiters.length} recruiters, ${domains.size} unique email domains`);
+  if (!domains.size) return;
+
+  // Fire checks concurrently
+  await Promise.allSettled([...domains].map(async domain => {
+    try {
+      const fd = new FormData();
+      fd.append('email', `check@${domain}`);
+      const res  = await fetch('/api/email/validate-domain', { method: 'POST', body: fd });
+      const data = await res.json();
+      _mxResults[domain] = { has_mx: data.has_mx, checked: true };
+      log('checkRecruiterMX', `${domain} has_mx=${data.has_mx} cached=${data.cached}`);
+    } catch(e) {
+      _mxResults[domain] = { has_mx: true, checked: true }; // assume valid on error
+    }
+  }));
+
+  // Re-render vetting page with MX badges now populated
+  applyVettingFilters();
+}
+
 function redFlagsFor(entity, allRecruiters) {
   const flags = [];
 
@@ -2361,6 +2419,11 @@ function redFlagsFor(entity, allRecruiters) {
       const domain = entity.email.split('@').pop().toLowerCase().trim();
       if (FREE_EMAIL_DOMAINS.has(domain)) {
         flags.push({ reason: `Free email domain (${domain})` });
+      }
+      // No MX records (server-side check)
+      const mx = _mxResults[domain];
+      if (mx && mx.checked && !mx.has_mx) {
+        flags.push({ reason: `No MX records for domain (${domain})` });
       }
     }
 
@@ -2522,6 +2585,24 @@ function renderRecruitersView(recruiters) {
     const flags     = redFlagsFor(r, recruiters);
     const badges    = redFlagBadges(flags);
 
+    // MX status indicator + per-recruiter check button
+    let mxBadge = '';
+    let mxBtn   = '';
+    if (r.email) {
+      const domain = r.email.split('@').pop().toLowerCase().trim();
+      const mx     = _mxResults[domain];
+      const btnId  = `mx-btn-${domain.replace(/[^a-z0-9]/g, '-')}`;
+      if (mx && mx.checked) {
+        mxBadge = mx.has_mx
+          ? `<span class="text-xs" style="color:var(--green);margin-left:6px;" title="MX records verified">✓ MX</span>`
+          : `<span class="text-xs" style="color:var(--red);margin-left:6px;" title="No MX records found">✗ MX</span>`;
+      } else {
+        mxBtn = `<button id="${escHtml(btnId)}" class="btn btn-ghost btn-sm"
+          style="font-size:11px;padding:2px 6px;margin-left:6px;"
+          onclick="checkRecruiterEmailMX('${escHtml(r.email)}','${escHtml(btnId)}')">🔍</button>`;
+      }
+    }
+
     return `
       <div class="card" style="margin-bottom:12px;">
         <div class="flex items-center gap-10" style="margin-bottom:10px;">
@@ -2532,6 +2613,7 @@ function renderRecruitersView(recruiters) {
             <div class="text-xs text-mono mt-4" style="color:var(--amber);">
               ${r.email ? escHtml(r.email) : ''}
               ${r.phone ? ' · ' + escHtml(r.phone) : ''}
+              ${mxBadge}${mxBtn}
             </div>
             <div style="margin-top:6px;">${companies}</div>
             ${badges ? `<div class="red-flag-row" style="margin-top:6px;">${badges}</div>` : ''}
@@ -2762,6 +2844,7 @@ async function initVettingPage() {
                onchange="_vettingPageCompany=1;_vettingPageRecruit=1;applyVettingFilters()" />
       </div>
       <button class="btn btn-ghost btn-sm" id="vetting-clear-btn" onclick="clearVettingFilters()" style="display:none;">\u2715 Clear</button>
+      <div id="mx-check-btn-area" style="display:inline-block;"></div>
     </div>
     <div class="tab-container" id="vetting-tabs">
       <div class="tabs">
@@ -2801,9 +2884,39 @@ async function initVettingPage() {
   }
 
   try {
-    const res  = await fetch('/api/vetting');
-    _vettingData = await res.json();
+    const [vettingRes, statusRes, mxCacheRes] = await Promise.all([
+      fetch('/api/vetting'),
+      fetch('/api/providers/status'),
+      fetch('/api/email/mx-cache'),
+    ]);
+    _vettingData = await vettingRes.json();
+    const providers = statusRes.ok ? await statusRes.json() : {};
+    const mxAutoCheck = providers.mx_auto_check !== false; // default true
+
+    // Pre-populate _mxResults from DB cache
+    if (mxCacheRes.ok) {
+      const cached = await mxCacheRes.json();
+      Object.assign(_mxResults, cached);
+      log('initVettingPage', `loaded ${Object.keys(cached).length} MX results from cache`);
+    }
+
     applyVettingFilters();
+
+    // Show manual MX check button or fire automatically
+    const mxBtnArea = document.getElementById('mx-check-btn-area');
+    if (mxBtnArea) {
+      if (mxAutoCheck) {
+        mxBtnArea.innerHTML = '';
+        checkRecruiterMX(_vettingData.recruiters || []);
+      } else {
+        mxBtnArea.innerHTML = `<button class="btn btn-sm" onclick="runManualMXCheck()" id="mx-check-btn">
+          🔍 Check MX Records
+        </button>`;
+      }
+    } else {
+      // Fallback if button area not present
+      if (mxAutoCheck) checkRecruiterMX(_vettingData.recruiters || []);
+    }
   } catch(e) {
     logErr('initVettingPage', 'fetch threw:', e);
     main.innerHTML = TMPL.emptyPanel('Failed to load vetting data.');

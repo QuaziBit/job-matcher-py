@@ -1509,7 +1509,8 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         for key in ["has_anthropic", "has_openai", "has_gemini", "has_ollama",
-                    "anthropic_model", "openai_model", "gemini_model", "ollama_model"]:
+                    "anthropic_model", "openai_model", "gemini_model", "ollama_model",
+                    "mx_auto_check"]:
             self.assertIn(key, data, f"Missing key: {key}")
 
     async def test_providers_status_has_anthropic_false_when_key_unset(self):
@@ -1569,6 +1570,14 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         for key in ["anthropic_model", "openai_model", "gemini_model", "ollama_model"]:
             self.assertIsInstance(data[key], str, f"{key} should be a string")
             self.assertTrue(len(data[key]) > 0, f"{key} should not be empty")
+
+    async def test_providers_status_mx_auto_check_defaults_true(self):
+        """mx_auto_check should default to True when MX_AUTO_CHECK env var is unset."""
+        import os
+        os.environ.pop("MX_AUTO_CHECK", None)
+        resp = await self.client.get("/api/providers/status")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIs(resp.json()["mx_auto_check"], True)
 
     # ── PATCH /api/jobs/{id}/url ───────────────────────────────────────────
 
@@ -2068,3 +2077,47 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         data = resp.json()
         self.assertTrue(data["cached"])
         self.assertEqual(data["company_name"], "MetaTest LLC")
+
+    # ── GET /api/email/mx-cache ───────────────────────────────────────────────
+
+    async def test_mx_cache_returns_empty_dict_when_no_entries(self):
+        """GET /api/email/mx-cache returns empty dict on fresh DB."""
+        resp = await self.client.get("/api/email/mx-cache")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {})
+
+    async def test_mx_cache_returns_cached_entry_after_validate(self):
+        """GET /api/email/mx-cache returns entry after a domain is checked."""
+        import aiosqlite
+        async with aiosqlite.connect(os.environ["DB_PATH"]) as db:
+            await db.execute(
+                """INSERT INTO domain_mx_cache (domain, has_mx, mx_records)
+                   VALUES (?, ?, ?)""",
+                ("example.com", 1, "mx1.example.com"),
+            )
+            await db.commit()
+
+        resp = await self.client.get("/api/email/mx-cache")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("example.com", data)
+        self.assertTrue(data["example.com"]["has_mx"])
+        self.assertTrue(data["example.com"]["checked"])
+
+    async def test_mx_cache_response_has_required_fields(self):
+        """Each entry in mx-cache must have has_mx, mx_records, checked."""
+        import aiosqlite
+        async with aiosqlite.connect(os.environ["DB_PATH"]) as db:
+            await db.execute(
+                """INSERT INTO domain_mx_cache (domain, has_mx, mx_records)
+                   VALUES (?, ?, ?)""",
+                ("testcorp.com", 0, ""),
+            )
+            await db.commit()
+
+        resp = await self.client.get("/api/email/mx-cache")
+        data = resp.json()
+        self.assertIn("testcorp.com", data)
+        entry = data["testcorp.com"]
+        for key in ("has_mx", "mx_records", "checked"):
+            self.assertIn(key, entry, f"Missing key: {key}")

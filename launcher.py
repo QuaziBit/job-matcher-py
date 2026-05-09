@@ -128,6 +128,7 @@ def render_launcher_page(cfg: dict) -> str:
     ollama_timeout = cfg.get("ollama_timeout", 600)
     analysis_mode  = cfg.get("analysis_mode", "standard")
     show_more_logs = cfg.get("show_more_logs", False)
+    mx_auto_check  = cfg.get("mx_auto_check", True)
 
     html_path = os.path.join(_LAUNCHER_UI_DIR, "launcher.html")
     with open(html_path, encoding="utf-8") as f:
@@ -147,6 +148,7 @@ def render_launcher_page(cfg: dict) -> str:
         checked_standard       = "checked" if analysis_mode == "standard" else "",
         checked_detailed       = "checked" if analysis_mode == "detailed" else "",
         checked_show_more_logs = "checked" if show_more_logs else "",
+        checked_mx_auto_check  = "checked" if mx_auto_check  else "",
     )
 # ── HTTP request handler ──────────────────────────────────────────────────────
 
@@ -298,6 +300,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 logger.warning(f"✗ Invalid analysis_mode {v!r}")
         # Checkbox — present in form = true, absent = false
         cfg["show_more_logs"] = "show_more_logs" in form
+        cfg["mx_auto_check"]  = "mx_auto_check"  in form
 
         key = cfg.get("anthropic_api_key", "")
         masked = (key[:12] + "...") if key else "not set"
@@ -382,6 +385,7 @@ class Launcher:
                 "APP_HOST":          cfg.get("host", "127.0.0.1"),
                 "ANALYSIS_MODE":     cfg.get("analysis_mode", "standard"),
                 "SHOW_MORE_LOGS":    "true" if cfg.get("show_more_logs") else "false",
+                "MX_AUTO_CHECK":     "true" if cfg.get("mx_auto_check", True) else "false",
             }
 
             # Update existing lines

@@ -43,6 +43,8 @@ class TestDatabase(unittest.TestCase):
         self.assertIn("jobs", tables)
         self.assertIn("analyses", tables)
         self.assertIn("applications", tables)
+        self.assertIn("company_meta", tables)
+        self.assertIn("domain_mx_cache", tables)
 
     def test_init_is_idempotent(self):
         from database import init_db

@@ -117,6 +117,14 @@ async def init_db():
                 bbb_rating TEXT DEFAULT '',
                 crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS domain_mx_cache (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain      TEXT NOT NULL UNIQUE,
+                has_mx      INTEGER NOT NULL DEFAULT 0,
+                mx_records  TEXT DEFAULT '',
+                checked_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         await db.commit()
 

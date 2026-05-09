@@ -13,6 +13,7 @@ import aiosqlite
 from database import get_db, init_db, get_company_meta, upsert_company_meta
 from scraper import scrape_job, assess_job_text_quality
 from company_crawler import crawl_company
+from mx_validator import validate_email_domain
 from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model, BLOCKER_KEYWORDS
 from analyzer.config import anthropic_model, openai_model, gemini_model
 from analyzer.known_models import KNOWN_MODELS
@@ -974,6 +975,52 @@ async def get_company_meta_endpoint(company_name: str = ""):
     return JSONResponse({"ok": True, "cached": True, **row})
 
 
+@app.post("/api/email/validate-domain")
+async def validate_email_domain_endpoint(
+    email: str = Form(""),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """
+    Check MX records for an email address domain.
+    Results are cached in domain_mx_cache for 24 hours.
+    Returns {email, domain, valid, has_mx, mx_records, cached, error}.
+    """
+    email = email.strip()
+    if not email:
+        return JSONResponse({"error": "email is required."}, status_code=422)
+
+    result = await validate_email_domain(email, db)
+    logger.info(
+        f"→ MX check: email={email!r} domain={result['domain']!r} "
+        f"has_mx={result['has_mx']} cached={result['cached']}"
+    )
+    if os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes"):
+        logger.info(f"→ MX full result: {result}")
+    return JSONResponse(result)
+
+
+@app.get("/api/email/mx-cache")
+async def get_mx_cache(db: aiosqlite.Connection = Depends(get_db)):
+    """Return all cached MX results as {domain: {has_mx, mx_records}} map."""
+    try:
+        async with db.execute(
+            "SELECT domain, has_mx, mx_records FROM domain_mx_cache"
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    except Exception as e:
+        logger.error(f"✗ get_mx_cache DB error: {e}")
+        return JSONResponse({})
+    result = {
+        r["domain"]: {
+            "has_mx":     bool(r["has_mx"]),
+            "mx_records": (r["mx_records"] or "").split(",") if r["mx_records"] else [],
+            "checked":    True,
+        }
+        for r in rows
+    }
+    return JSONResponse(result)
+
+
 @app.post("/api/resumes/extract")
 async def extract_resume_file(file: UploadFile = File(...)):
     """Extract plain text from an uploaded TXT, PDF, or DOCX file."""
@@ -1221,6 +1268,7 @@ async def get_providers_status():
         "openai_model":    openai_model(),
         "gemini_model":    gemini_model(),
         "ollama_model":    _ollama_model(),
+        "mx_auto_check":   os.getenv("MX_AUTO_CHECK", "true").lower() in ("1", "true", "yes"),
     })
 
 
@@ -1292,6 +1340,7 @@ if __name__ == "__main__":
         "ollama_timeout":    int(os.getenv("OLLAMA_TIMEOUT", "600")),
         "analysis_mode":     os.getenv("ANALYSIS_MODE", "standard"),
         "show_more_logs":    os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes"),
+        "mx_auto_check":     os.getenv("MX_AUTO_CHECK", "true").lower() in ("1", "true", "yes"),
     }
 
     launcher_instance = Launcher(initial_cfg)

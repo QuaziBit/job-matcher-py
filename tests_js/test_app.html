@@ -1055,6 +1055,26 @@ test("shows red flag for free email",  () => assertContains(renderRecruitersView
 test("shows red flag for generic name",() => assertContains(renderRecruitersView([{...BASE_RECRUITER, name:"HR Team"}]), "🚩"));
 test("shows red flag for 3+ companies",() => assertContains(renderRecruitersView([{...BASE_RECRUITER, companies:["A","B","C"]}]), "🚩"));
 test("no red flag for clean recruiter",() => assertNotContains(renderRecruitersView([BASE_RECRUITER]), "red-flag-badge"));
+test("shows MX check button when domain unchecked", () => {
+  delete _mxResults["acme.com"];
+  assertContains(renderRecruitersView([BASE_RECRUITER]), "🔍");
+});
+test("shows green checkmark when MX verified", () => {
+  _mxResults["acme.com"] = { has_mx: true, checked: true };
+  const html = renderRecruitersView([BASE_RECRUITER]);
+  delete _mxResults["acme.com"];
+  assertContains(html, "✓ MX");
+});
+test("shows red X when no MX records", () => {
+  _mxResults["acme.com"] = { has_mx: false, checked: true };
+  const html = renderRecruitersView([BASE_RECRUITER]);
+  delete _mxResults["acme.com"];
+  assertContains(html, "✗ MX");
+});
+test("no MX button when no email", () => {
+  delete _mxResults["acme.com"];
+  assertNotContains(renderRecruitersView([{...BASE_RECRUITER, email:""}]), "checkRecruiterEmailMX");
+});
 
 
 section("redFlagsFor");
@@ -1080,6 +1100,22 @@ test("anon flag reason mentions anonymous",  () => assertContains(redFlagsFor(AN
 test("company with recruiter — no anon flag",() => assertEqual(redFlagsFor(CLEAN_COMPANY, []).length, 0));
 test("multiple flags accumulate",            () => { const r = {...CLEAN_RECRUITER, email:"x@gmail.com", name:"HR Team", companies:["A","B","C"]}; assertEqual(redFlagsFor(r, []).length, 3); });
 test("free email flag reason mentions domain",() => assertContains(redFlagsFor({...CLEAN_RECRUITER, email:"x@gmail.com"}, []).map(f=>f.reason).join(''), "gmail.com"));
+test("MX flag when domain has no MX records", () => {
+  _mxResults["nomx.example.com"] = { has_mx: false, checked: true };
+  const flags = redFlagsFor({...CLEAN_RECRUITER, email:"x@nomx.example.com"}, []);
+  delete _mxResults["nomx.example.com"];
+  assertContains(flags.map(f=>f.reason).join(''), "No MX records");
+});
+test("no MX flag when domain has MX records", () => {
+  _mxResults["hasmx.example.com"] = { has_mx: true, checked: true };
+  const flags = redFlagsFor({...CLEAN_RECRUITER, email:"x@hasmx.example.com"}, []);
+  delete _mxResults["hasmx.example.com"];
+  assertEqual(flags.length, 0);
+});
+test("no MX flag when domain not yet checked", () => {
+  const flags = redFlagsFor({...CLEAN_RECRUITER, email:"x@unchecked.example.com"}, []);
+  assertEqual(flags.length, 0);
+});
 
 
 section("redFlagBadges");
