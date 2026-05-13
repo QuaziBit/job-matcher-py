@@ -37,12 +37,15 @@
 
 ## What It Does
 
-- Scrapes job postings from a URL (Indeed, LinkedIn, Greenhouse, Workday, etc.)
+- Scrapes job postings from a URL or accepts pasted/manual job descriptions
 - Compares each job description against your resume using an LLM
 - Scores the match from **1** (poor) to **5** (excellent) with a skill breakdown
 - Applies a **penalty pipeline** — detects hard blockers like clearance requirements and experience minimums and adjusts the raw score automatically
+- Estimates salary range for each job using the configured LLM provider
+- Vets companies by crawling BBB, Glassdoor, and LinkedIn, then running an LLM legitimacy assessment
+- Validates recruiter email domains via MX DNS lookup — no personal data leaves the machine
 - Tracks application status, recruiter contact info, and personal notes
-- Supports **Anthropic API** (Claude) or **Ollama** (local models, fully offline)
+- Supports **Anthropic**, **OpenAI**, **Gemini**, and **Ollama** (local models, fully offline)
 
 **Stack:** FastAPI · SQLite · Jinja2 · Plain JS · BeautifulSoup · Python 3.10+
 
@@ -313,21 +316,24 @@ ollama serve
 | Model | RAM needed | Quality |
 |---|---|---|
 | `llama3.1:8b` | ~8 GB | Best balance for everyday use |
+| `gemma4:e4b` | ~8 GB | Strong quality, good JSON reliability |
 | `gemma3:27b` | ~32 GB | Near-Anthropic quality |
-| `mistral:7b` | ~5 GB | Decent, lightweight |
 | `phi3.5:3.8b` | ~4 GB | Fast triage only |
+
+> ⚠️ `mistral` family models are not recommended — known to produce false skill gap detection and unreliable structured output.
 
 **Recommended workflow:**
 
-- Quick triage → `llama3.1:8b`
+- Quick triage → `llama3.1:8b` or `gemma4:e4b`
 - Serious roles → `gemma3:27b`
-- Final decision → Anthropic toggle
+- Final decision → Anthropic or Gemini or OpenAI
+
 
 ---
 
 ## Scraping Notes
 
-Works out of the box with most public job boards: Indeed, LinkedIn, Greenhouse, Lever, SmartRecruiters, BambooHR.
+Works with most public job boards that serve static HTML. Tested with LinkedIn and Indeed. Other boards may work but have not been fully verified.
 
 May not work if the page:
 
@@ -335,7 +341,19 @@ May not work if the page:
 - Renders content entirely via JavaScript (some Workday / iCIMS pages)
 - Has aggressive bot detection
 
-**Workaround:** Use the **Paste** tab — copy the job description text from your browser and paste it directly.
+If the scraper cannot extract a company name from the page, the job will be grouped under **Unknown Company** on the vetting page. Use the job detail page to set the company name manually.
+
+**Workaround:** Use the **Paste** tab — copy the job description text from your browser and paste it directly. Or use the **Manual** tab to enter the job details by hand without a URL.
+
+## Company Vetting Notes
+
+The vetting page crawls three public sources for each company:
+
+- **BBB** (Better Business Bureau) — rating and listing status
+- **Glassdoor** — rating and review count
+- **LinkedIn** — employee count and founded date
+
+Crawling may return partial results depending on bot detection and page availability. Results are cached for 7 days.
 
 ---
 
@@ -343,77 +361,84 @@ May not work if the page:
 
 ```
 job-matcher-py/
-├── main.py              FastAPI app — all routes and request handling
-├── health.py            Startup health checks (SQLite, Ollama, Anthropic)
-├── utils.py             Shared helpers (format_duration, build_comparison)
-├── skills.py
-├── launcher.py          Browser-based launcher (health checks, Start/Stop/Restart)
-├── launcher_ui/
-│   ├── launcher.css
-│   ├── launcher.html
-│   └── launcher.js
-├── database.py          SQLite schema init and async connection helper
-├── scraper.py           URL fetching, HTML parsing, metadata extraction
-├── ollama_utils.py      Ollama API client with error handling
-├── analyzer/            LLM prompt construction, API calls, penalty pipeline
-│   ├── __init__.py
-│   ├── config.py
-│   ├── llm.py
-│   ├── parsers.py
-│   ├── penalties.py
-│   ├── prompts.py
-│   ├── salary.py
-│   └── skills_helpers.py
-├── run_tests.py         Test runner script
-├── tests/               Full unit + integration test suite
-│   ├── __init__.py
-│   ├── mock_data.py
-│   ├── test_analyzer.py
-│   ├── test_api.py
-│   ├── test_database.py
-│   ├── test_salary.py
-│   └── test_scraper.py
-├── tests_js/            Browser-based JavaScript tests (no dependencies)
-│   └── test_app.html
-├── screenshots/         Example screenshots for the README
-├── templates/
-│   ├── base.html        Sidebar layout shell
-│   ├── index.html       Jobs list page
-│   ├── job_detail.html  Analysis, application tracking, description viewer
-│   └── resumes.html     Resume version manager
-├── static/
-│   ├── css/style.css    Dark theme, IBM Plex fonts
-│   └── js/app.js        Form submissions, toasts, tabs, score meters
-├── .env                 Your secrets — never commit this file
-├── .env.example         Template for .env
-├── requirements.txt     Python dependencies with pinned versions
-├── job_matcher.db       SQLite database — auto-created on first run
-├── LICENSE
-├── README.md
-└── .gitignore
+├── main.py                         # FastAPI app — all API endpoints and routing
+├── database.py                     # SQLite schema, migrations, and DB helpers
+├── launcher.py                     # GUI launcher (system tray + config form)
+├── scraper.py                      # Job URL scraper (HTML → title/company/description)
+├── company_crawler.py              # Company data crawler (BBB, Glassdoor, LinkedIn)
+├── mx_validator.py                 # Email domain MX validation via nslookup (no PII)
+├── health.py                       # Health check endpoint
+├── ollama_utils.py                 # Ollama model listing helper
+├── skills.py                       # Skills extraction utilities
+├── utils.py                        # Shared utilities
+├── run_tests.py                    # Test runner entry point
+├── requirements.txt                # Python dependencies
+│
+├── analyzer/                       # LLM analysis layer
+│   ├── llm.py                      # Core LLM call (Anthropic/OpenAI/Gemini/Ollama)
+│   ├── salary.py                   # Salary estimation via LLM
+│   ├── company_vetter.py           # LLM company legitimacy vetting (no PII)
+│   ├── prompts.py                  # Prompt templates for job analysis
+│   ├── parsers.py                  # LLM response parsers
+│   ├── penalties.py                # Score penalty logic
+│   ├── skills_helpers.py           # Skills matching helpers
+│   ├── known_models.py             # Known model definitions per provider
+│   ├── config.py                   # Analyzer config (models, URLs, env vars)
+│   └── __init__.py
+│
+├── ui/                             # Shared frontend (vanilla JS + HTML)
+│   ├── index.html                  # Jobs list page
+│   ├── job_detail.html             # Job detail page
+│   ├── job_preview.html            # Job preview page
+│   ├── resumes.html                # Resumes page
+│   ├── vetting.html                # Vetting page (companies + recruiters)
+│   ├── static/
+│   │   ├── js/
+│   │   │   └── app.js              # Main frontend JS (~3000 lines)
+│   │   └── css/                    # Stylesheets
+│   └── launcher/
+│       ├── launcher.html           # Launcher config form
+│       ├── launcher.js             # Launcher frontend logic
+│       └── launcher.css            # Launcher styles
+│
+├── tests/                          # Python unit + integration tests
+│   ├── test_api.py                 # API endpoint tests
+│   ├── test_database.py            # DB schema, migration, and helper tests
+│   ├── test_analyzer.py            # LLM analysis tests
+│   ├── test_company_vetter.py      # Company vetting tests
+│   ├── test_company_crawler.py     # Crawler tests
+│   ├── test_mx_validator.py        # MX validation tests
+│   ├── test_salary.py              # Salary estimation tests
+│   ├── test_scraper.py             # Scraper tests
+│   ├── test_known_models.py        # Known models tests
+│   ├── test_gemini.py              # Gemini-specific tests
+│   ├── test_openai.py              # OpenAI-specific tests
+│   └── mock_data.py                # Shared test fixtures
+│
+└── tests_js/
+    └── test_app.html               # Browser-based JS unit tests
 ```
 
 ---
 
-**Branch: v3-advanced**
-This branch builds on v2-advanced and adds Analysis Mode (fast / standard /
-detailed), a real-time progress bar with elapsed time tracking, duration and
-mode stored per analysis, and dynamic context window resolution for Ollama.
+**Local model compatibility (Ollama):**
 
-**Local model compatibility:**
-
-- `llama3.1:8b` — works in all modes (fast / standard / detailed)
+- `llama3.1:8b` — works reliably in all modes (fast / standard / detailed) and for company vetting
+- `llama3.2:3b` — works in all modes (fast / standard / detailed)
 - `phi3.5:3.8b` — works in all modes (fast / standard / detailed)
-- `gemma3:27b`  — works in fast and standard modes
-                  detailed mode may take 15-20+ minutes on consumer hardware,
-                  increase `OLLAMA_TIMEOUT` to 2000s+ before attempting it
+- `gemma3:27b` — works in fast and standard modes; detailed mode may take
+  15-20+ minutes on consumer hardware, increase `OLLAMA_TIMEOUT` to 2000s+
+- `gemma4:e4b` — works reliably in all modes and for company vetting
+- `gemma4:e2b` — works reliably in all modes and for company vetting
+- `mistral` family — **not recommended**, known to produce false skill gap
+  detection and unreliable structured output
 - `nemotron-3-nano` — not compatible, ignores structured output format
-- Anthropic — works reliably in all modes
 
-For the advanced features without Analysis Mode see
-[v2-advanced](https://github.com/QuaziBit/job-matcher-py/tree/v2-advanced).
-For the stable faster version see
-[main](https://github.com/QuaziBit/job-matcher-py/tree/main).
+**Cloud model compatibility:**
+
+- Anthropic (`claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-6`) — works reliably in all modes
+- OpenAI (`gpt-4o-mini`, `gpt-4o`, `gpt-4-turbo`, `o1-mini`, `o1`) — works reliably in all modes
+- Gemini (`gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro`, `gemini-2.0-flash`) — works reliably in all modes
 
 ---
 
