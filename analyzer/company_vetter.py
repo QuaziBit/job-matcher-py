@@ -5,7 +5,13 @@ Uses crawled company data (BBB, Glassdoor, LinkedIn) to build a focused
 prompt and calls the configured LLM provider for a risk assessment.
 Results are stored back in company_meta (llm_* columns) and cached for 7 days.
 
-Only company names and public data are sent to the LLM — no PII.
+Only company names and publicly crawled data are sent to the LLM — no PII.
+
+PRIVACY DECISION: LLM recruiter vetting is deliberately NOT implemented.
+Sending recruiter name/email/phone to cloud LLM providers would expose
+personal data. MX domain checks (mx_validator.py) are the privacy-safe
+recruiter signal: only the domain (e.g. abbtech.com) ever leaves the
+machine — never the full email address or any personal identifiers.
 """
 
 import json
