@@ -260,6 +260,9 @@ async def _call_salary_llm(prompt: str, provider: str, temperature: float = 0.1,
                 # No max_output_tokens — thinking models consume tokens internally,
                 # capping at 400 starves the visible JSON output.
                 temperature=temperature,
+                automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(
+                    disable=True,
+                ),
             ),
         )
         raw   = response.text or ""

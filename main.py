@@ -10,10 +10,11 @@ from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 import aiosqlite
-from database import get_db, init_db, get_company_meta, upsert_company_meta
+from database import get_db, init_db, get_company_meta, upsert_company_meta, upsert_company_vetting
 from scraper import scrape_job, assess_job_text_quality
 from company_crawler import crawl_company
 from mx_validator import validate_email_domain
+from analyzer.company_vetter import vet_company, CACHE_TTL_DAYS
 from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model, BLOCKER_KEYWORDS
 from analyzer.config import anthropic_model, openai_model, gemini_model
 from analyzer.known_models import KNOWN_MODELS
@@ -124,8 +125,43 @@ async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
         recruiters_list.append(v)
     recruiters_list.sort(key=lambda r: (r["name"] or r["email"]).lower())
 
+    # Attach cached LLM vetting data to each company
+    company_names = list(companies.keys())
+    meta_map = {}
+    if company_names:
+        try:
+            placeholders = ",".join(["?"] * len(company_names))
+            async with db.execute(
+                f"""SELECT company_name, llm_risk_level, llm_assessment,
+                           llm_signals, llm_provider, llm_model, llm_assessed_at
+                    FROM company_meta WHERE company_name IN ({placeholders})""",
+                company_names,
+            ) as cur:
+                for row in await cur.fetchall():
+                    row = dict(row)
+                    import json as _json
+                    signals = []
+                    try:
+                        signals = _json.loads(row.get("llm_signals") or "[]")
+                    except Exception:
+                        pass
+                    meta_map[row["company_name"]] = {
+                        "llm_risk_level":  row.get("llm_risk_level"),
+                        "llm_assessment":  row.get("llm_assessment"),
+                        "llm_signals":     signals,
+                        "llm_provider":    row.get("llm_provider"),
+                        "llm_model":       row.get("llm_model"),
+                        "llm_assessed_at": row.get("llm_assessed_at"),
+                    }
+        except Exception as e:
+            logger.warning(f"→ could not fetch company_meta for vetting: {e}")
+
+    companies_list = list(companies.values())
+    for c in companies_list:
+        c["meta"] = meta_map.get(c["company"], {})
+
     return JSONResponse({
-        "companies":  list(companies.values()),
+        "companies":  companies_list,
         "recruiters": recruiters_list,
     })
 
@@ -973,6 +1009,98 @@ async def get_company_meta_endpoint(company_name: str = ""):
     if row is None:
         return JSONResponse({"ok": True, "cached": False, "company_name": company_name})
     return JSONResponse({"ok": True, "cached": True, **row})
+
+
+@app.post("/api/companies/vet")
+async def vet_company_endpoint(
+    company_name: str = Form(""),
+    provider:     str = Form("anthropic"),
+    model:        str = Form(""),
+    force:        str = Form(""),
+):
+    """
+    Run LLM vetting for a company using its crawled metadata.
+    If crawl data doesn't exist, auto-crawls first.
+    Results are cached in company_meta for 7 days.
+    Returns {risk_level, assessment, signals, provider, model, cached}.
+    Only company names and public data are sent to the LLM — no PII.
+    """
+    company_name = company_name.strip()
+    if not company_name:
+        return JSONResponse({"error": "company_name is required."}, status_code=422)
+
+    provider = provider.strip().lower() or "anthropic"
+    model    = model.strip()
+    force_rescan = force.strip().lower() in ("1", "true", "yes")
+
+    # Check 7-day cache first (skip if force rescan)
+    row = await get_company_meta(company_name)
+    if not force_rescan and row and row.get("llm_assessed_at"):
+        from datetime import datetime, timedelta
+        try:
+            assessed_at = datetime.fromisoformat(row["llm_assessed_at"])
+            if datetime.utcnow() - assessed_at < timedelta(days=CACHE_TTL_DAYS):
+                import json as _json
+                signals = []
+                try:
+                    signals = _json.loads(row.get("llm_signals") or "[]")
+                except Exception:
+                    pass
+                logger.info(f"✓ Returning cached vetting for: {company_name!r}")
+                return JSONResponse({
+                    "ok":          True,
+                    "cached":      True,
+                    "company":     company_name,
+                    "risk_level":  row.get("llm_risk_level", "unknown"),
+                    "assessment":  row.get("llm_assessment", ""),
+                    "signals":     signals,
+                    "provider":    row.get("llm_provider", provider),
+                    "model":       row.get("llm_model", ""),
+                })
+        except Exception:
+            pass
+
+    # Ensure crawl data exists — auto-crawl if missing
+    if not row or not row.get("crawled_at"):
+        logger.info(f"→ auto-crawling {company_name!r} before vetting")
+        try:
+            crawl_data = await crawl_company(company_name)
+            await upsert_company_meta(company_name, crawl_data)
+            row = await get_company_meta(company_name) or {}
+        except Exception as e:
+            logger.warning(f"→ crawl failed for {company_name!r}: {e} — proceeding with empty meta")
+            row = {}
+
+    # Run LLM vetting
+    try:
+        result = await vet_company(company_name, row or {}, provider, model)
+    except ValueError as e:
+        logger.error(f"✗ vet_company failed for {company_name!r}: {e}")
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except Exception as e:
+        logger.error(f"✗ vet_company unexpected error for {company_name!r}: {e}")
+        return JSONResponse({"error": "Vetting failed — please try again."}, status_code=500)
+
+    # Cache result
+    await upsert_company_vetting(
+        company_name,
+        result["risk_level"],
+        result["assessment"],
+        result.get("signals", []),
+        result["provider"],
+        result["model"],
+    )
+
+    return JSONResponse({
+        "ok":         True,
+        "cached":     False,
+        "company":    company_name,
+        "risk_level": result["risk_level"],
+        "assessment": result["assessment"],
+        "signals":    result.get("signals", []),
+        "provider":   result["provider"],
+        "model":      result["model"],
+    })
 
 
 @app.post("/api/email/validate-domain")

@@ -172,6 +172,9 @@ async def call_gemini_once(resume: str, job_description: str) -> dict:
             # (2.5 Flash etc.) consume tokens internally before visible output,
             # so a hard cap starves the response. Let the model decide.
             temperature=0.2,
+            automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(
+                disable=True,
+            ),
         ),
     )
     raw = response.text or ""

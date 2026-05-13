@@ -2476,6 +2476,19 @@ function renderCompaniesView(companies) {
 
     const enc    = encodeURIComponent(c.company);
     const safeId = enc.replace(/[^a-zA-Z0-9]/g, '_');
+
+    // LLM vetting badge — show cached result if available
+    const meta = c.meta || {};
+    let vetBadge = '';
+    if (meta.llm_risk_level) {
+      const riskIcon  = { low: '🟢', medium: '🟡', high: '🔴', unknown: '⚪' };
+      const riskLabel = { low: 'Low risk', medium: 'Medium risk', high: 'High risk', unknown: 'Unknown' };
+      const icon  = riskIcon[meta.llm_risk_level]  || '⚪';
+      const label = riskLabel[meta.llm_risk_level] || 'Unknown';
+      vetBadge = `<span class="provider-tag" style="cursor:pointer;" title="Click to expand AI vetting details"
+        onclick="showVetDetails('${escHtml(c.company)}', '${safeId}')">${icon} ${label} <span style="opacity:0.6; font-size:10px;">▾</span></span>`;
+    }
+
     const links  = c.company ? `
       <div class="quick-links" style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <a href="https://www.bbb.org/search?find_text=${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">BBB</a>
@@ -2483,9 +2496,13 @@ function renderCompaniesView(companies) {
         <a href="https://www.linkedin.com/company/${enc}" target="_blank" rel="noopener noreferrer" class="quick-link">LinkedIn</a>
         <a href="https://www.google.com/search?q=${enc}+reviews+site:glassdoor.com+OR+site:bbb.org" target="_blank" rel="noopener noreferrer" class="quick-link">🔍 Search</a>
         <button class="btn btn-ghost btn-xs" style="font-size:11px;" onclick="crawlCompany('${escHtml(c.company)}', '${safeId}')">🕷 Vet</button>
+        <button class="btn btn-ghost btn-xs" style="font-size:11px;" id="llm-vet-btn-${safeId}"
+          onclick="vetCompany('${escHtml(c.company)}', '${safeId}')">🤖 AI Vet</button>
         <span id="crawl-spinner-${safeId}" style="display:none; font-size:11px; color:var(--text-mute);">crawling…</span>
       </div>
-      <div id="crawl-results-${safeId}" style="margin-top:6px;"></div>` : '';
+      <div id="crawl-results-${safeId}" style="margin-top:6px;"></div>
+      <div id="vet-badge-${safeId}" style="margin-top:6px;">${vetBadge}</div>
+      <div id="vet-results-${safeId}" style="margin-top:4px;"></div>` : '';
     const flags  = redFlagsFor(c, []);
     const badges = redFlagBadges(flags);
 
@@ -2535,6 +2552,148 @@ async function crawlCompany(companyName, safeId) {
   } finally {
     if (spinner) spinner.style.display = 'none';
   }
+}
+
+async function vetCompany(companyName, safeId) {
+  await _vetCompany(companyName, safeId, true);
+}
+
+async function _vetCompany(companyName, safeId, force) {
+  log('vetCompany', `company="${companyName}" force=${force}`);
+  const btn     = document.getElementById(`llm-vet-btn-${safeId}`);
+  const results = document.getElementById(`vet-results-${safeId}`);
+  if (!results) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = force ? '🔄 Re-scanning…' : '🤖 Vetting…'; }
+  results.innerHTML = `<span class="text-xs text-dim">${force ? 'Re-scanning…' : 'Running AI vetting…'}</span>`;
+
+  // Read provider + model from vetting page selectors
+  const providerEl = document.getElementById('vetting-provider-select');
+  const modelEl    = document.getElementById('vetting-model-select');
+  const provider   = providerEl ? providerEl.value : 'anthropic';
+  const model      = modelEl ? (modelEl.value || '') : '';
+
+  try {
+    const fd = new FormData();
+    fd.append('company_name', companyName);
+    fd.append('provider', provider);
+    if (model) fd.append('model', model);
+    if (force) fd.append('force', 'true');
+    const res  = await fetch('/api/companies/vet', { method: 'POST', body: fd });
+    const data = await res.json();
+    log('vetCompany', `status=${res.status} risk=${data.risk_level} cached=${data.cached}`, data);
+    if (!res.ok) {
+      results.innerHTML = `<span class="text-xs" style="color:var(--red);">Vetting failed: ${escHtml(data.error || 'unknown error')}</span>`;
+      return;
+    }
+    results.innerHTML = renderVetResults(data, companyName, safeId);
+    results.dataset.expanded = '1';
+    // Update _vettingData so showVetDetails has fresh data on re-expand
+    if (_vettingData?.companies) {
+      const company = _vettingData.companies.find(c => c.company === companyName);
+      if (company) {
+        company.meta = {
+          llm_risk_level:  data.risk_level,
+          llm_assessment:  data.assessment,
+          llm_signals:     JSON.stringify(data.signals || []),
+          llm_provider:    data.provider,
+          llm_model:       data.model,
+          llm_assessed_at: new Date().toISOString(),
+        };
+      }
+    }
+    // Update the badge div with fresh risk level
+    const badgeDiv = document.getElementById(`vet-badge-${safeId}`);
+    if (badgeDiv) {
+      const riskIcon  = { low: '🟢', medium: '🟡', high: '🔴', unknown: '⚪' };
+      const riskLabel = { low: 'Low risk', medium: 'Medium risk', high: 'High risk', unknown: 'Unknown' };
+      const icon  = riskIcon[data.risk_level]  || '⚪';
+      const label = riskLabel[data.risk_level] || 'Unknown';
+      badgeDiv.innerHTML = `<span class="provider-tag" style="cursor:pointer;"
+        title="Click to expand AI vetting details"
+        onclick="showVetDetails('${escHtml(companyName)}', '${escHtml(safeId)}')">${icon} ${label} <span style="opacity:0.6; font-size:10px;">▾</span></span>`;
+    }
+  } catch(err) {
+    logErr('vetCompany', 'fetch threw:', err);
+    results.innerHTML = `<span class="text-xs text-dim">Network error during vetting.</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 AI Vet'; }
+  }
+}
+
+async function updateVettingModelSelect() {
+  const providerEl = document.getElementById('vetting-provider-select');
+  const modelEl    = document.getElementById('vetting-model-select');
+  if (!providerEl || !modelEl) return;
+  const provider = providerEl.value;
+
+  modelEl.innerHTML = '<option value="">loading…</option>';
+  modelEl.style.display = '';
+
+  try {
+    if (provider === 'ollama') {
+      const res    = await fetch('/api/ollama/models');
+      const data   = await res.json();
+      const models = data.models || [];
+      modelEl.innerHTML = models.length
+        ? models.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('')
+        : '<option value="">no models found</option>';
+    } else {
+      const res    = await fetch(`/api/providers/models?provider=${provider}`);
+      const data   = await res.json();
+      const models = data.models || [];
+      modelEl.innerHTML = models.length
+        ? models.map(m => `<option value="${escHtml(m.id)}">${escHtml(m.label)}</option>`).join('')
+        : '<option value="">no models found</option>';
+    }
+  } catch(e) {
+    modelEl.innerHTML = '<option value="">unavailable</option>';
+  }
+}
+
+function renderVetResults(data, companyName, safeId) {
+  const cached  = data.cached ? ' <span class="text-xs text-dim">(cached)</span>' : '';
+  const signals = (data.signals || []).map(s =>
+    `<li style="font-size:11px; color:var(--text-mute); margin:2px 0;">• ${escHtml(s)}</li>`
+  ).join('');
+
+  return `
+    <div style="margin-top:4px;">
+      ${cached}
+      <div class="text-xs" style="margin-top:4px; color:var(--text); line-height:1.5;">
+        ${escHtml(data.assessment || '')}
+      </div>
+      ${signals ? `<ul style="margin:4px 0 0 0; padding:0; list-style:none;">${signals}</ul>` : ''}
+      <div class="text-xs text-dim" style="margin-top:4px;">via ${escHtml(data.provider || '')} ${data.model ? '· ' + escHtml(data.model) : ''}</div>
+    </div>`;
+}
+
+function showVetDetails(companyName, safeId) {
+  const results = document.getElementById(`vet-results-${safeId}`);
+  if (!results) return;
+
+  // Toggle — collapse if already expanded
+  if (results.dataset.expanded === '1') {
+    results.innerHTML = '';
+    results.dataset.expanded = '0';
+    return;
+  }
+
+  // Find the company in cached vetting data and render from it — no LLM call
+  const company = (_vettingData?.companies || []).find(c => c.company === companyName);
+  const meta    = company?.meta || {};
+  if (!meta.llm_risk_level) return;
+  let signals = [];
+  try { signals = JSON.parse(meta.llm_signals || '[]'); } catch(e) {}
+  results.innerHTML = renderVetResults({
+    risk_level: meta.llm_risk_level,
+    assessment: meta.llm_assessment || '',
+    signals,
+    provider:   meta.llm_provider || '',
+    model:      meta.llm_model    || '',
+    cached:     true,
+  }, companyName, safeId);
+  results.dataset.expanded = '1';
 }
 
 function renderCrawlResults(data) {
@@ -2845,6 +3004,19 @@ async function initVettingPage() {
       </div>
       <button class="btn btn-ghost btn-sm" id="vetting-clear-btn" onclick="clearVettingFilters()" style="display:none;">\u2715 Clear</button>
       <div id="mx-check-btn-area" style="display:inline-block;"></div>
+      <div id="vetting-provider-bar" style="display:inline-flex; align-items:center; gap:6px; margin-left:8px;">
+        <select id="vetting-provider-select" class="select select-sm"
+          style="font-size:12px; padding:2px 6px; height:28px;"
+          onchange="updateVettingModelSelect()">
+          <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI</option>
+          <option value="gemini">Gemini</option>
+          <option value="ollama">Ollama</option>
+        </select>
+        <select id="vetting-model-select" class="select select-sm"
+          style="font-size:12px; padding:2px 6px; height:28px; display:none;">
+        </select>
+      </div>
     </div>
     <div class="tab-container" id="vetting-tabs">
       <div class="tabs">
@@ -2898,6 +3070,16 @@ async function initVettingPage() {
       const cached = await mxCacheRes.json();
       Object.assign(_mxResults, cached);
       log('initVettingPage', `loaded ${Object.keys(cached).length} MX results from cache`);
+    }
+
+    // Set default vetting provider based on what's available
+    const providerSel = document.getElementById('vetting-provider-select');
+    if (providerSel && providers) {
+      if (providers.has_ollama)      providerSel.value = 'ollama';
+      else if (providers.has_anthropic) providerSel.value = 'anthropic';
+      else if (providers.has_openai)    providerSel.value = 'openai';
+      else if (providers.has_gemini)    providerSel.value = 'gemini';
+      updateVettingModelSelect();
     }
 
     applyVettingFilters();

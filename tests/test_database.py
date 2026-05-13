@@ -46,6 +46,49 @@ class TestDatabase(unittest.TestCase):
         self.assertIn("company_meta", tables)
         self.assertIn("domain_mx_cache", tables)
 
+    def test_company_meta_has_llm_columns(self):
+        from database import init_db
+        import aiosqlite
+
+        async def ops():
+            await init_db()
+            async with aiosqlite.connect(self.tmp.name) as db:
+                async with db.execute("PRAGMA table_info(company_meta)") as cur:
+                    return {row[1] for row in await cur.fetchall()}
+
+        columns = run(ops())
+        for col in ("llm_assessment", "llm_risk_level", "llm_signals",
+                    "llm_provider", "llm_model", "llm_assessed_at"):
+            self.assertIn(col, columns, f"Missing column: {col}")
+
+    def test_llm_columns_added_via_migration_to_existing_db(self):
+        """Simulates an existing DB without LLM columns — migration must add them."""
+        import aiosqlite
+        from database import init_db
+
+        async def ops():
+            # Create DB with old schema (no LLM columns)
+            async with aiosqlite.connect(self.tmp.name) as db:
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS company_meta (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        company_name TEXT NOT NULL UNIQUE,
+                        bbb_rating TEXT DEFAULT '',
+                        crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                await db.commit()
+            # Run init_db — migrations should add the missing columns
+            await init_db()
+            async with aiosqlite.connect(self.tmp.name) as db:
+                async with db.execute("PRAGMA table_info(company_meta)") as cur:
+                    return {row[1] for row in await cur.fetchall()}
+
+        columns = run(ops())
+        for col in ("llm_assessment", "llm_risk_level", "llm_signals",
+                    "llm_provider", "llm_model", "llm_assessed_at"):
+            self.assertIn(col, columns, f"Migration did not add column: {col}")
+
     def test_init_is_idempotent(self):
         from database import init_db
 

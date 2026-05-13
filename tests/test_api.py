@@ -1992,6 +1992,7 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         acme = next((c for c in companies if c["company"] == "Acme"), None)
         self.assertIsNotNone(acme)
         self.assertEqual(len(acme["jobs"]), 2)
+        self.assertIn("meta", acme)  # LLM vetting meta field must be present
 
     async def test_vetting_groups_recruiter_by_email(self):
         """Jobs with same recruiter email should be grouped together."""
@@ -2121,3 +2122,96 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         entry = data["testcorp.com"]
         for key in ("has_mx", "mx_records", "checked"):
             self.assertIn(key, entry, f"Missing key: {key}")
+
+    # ── POST /api/companies/vet ───────────────────────────────────────────────
+
+    async def test_vet_company_empty_name_returns_422(self):
+        """POST /api/companies/vet with no company_name returns 422."""
+        resp = await self.client.post("/api/companies/vet", data={})
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_vet_company_returns_structured_result(self):
+        """POST /api/companies/vet returns risk_level, assessment, signals."""
+        from unittest.mock import patch, AsyncMock
+        mock_result = {
+            "risk_level": "low", "assessment": "Established company.",
+            "signals": ["A+ BBB"], "company": "Acme Corp",
+            "provider": "anthropic", "model": "claude-sonnet-4-5",
+        }
+        with patch("main.vet_company", new=AsyncMock(return_value=mock_result)), \
+             patch("main.crawl_company", new=AsyncMock(return_value={})):
+            resp = await self.client.post(
+                "/api/companies/vet",
+                data={"company_name": "Acme Corp", "provider": "anthropic"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["risk_level"], "low")
+        self.assertIn("assessment", data)
+        self.assertIn("signals", data)
+
+    async def test_vet_company_returns_cached_result(self):
+        """POST /api/companies/vet returns cached:True when within TTL."""
+        import aiosqlite, json
+        async with aiosqlite.connect(os.environ["DB_PATH"]) as db:
+            await db.execute(
+                """INSERT INTO company_meta
+                   (company_name, llm_risk_level, llm_assessment, llm_signals,
+                    llm_provider, llm_model, llm_assessed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                ("CachedCo", "medium", "Some concerns.", "[]", "anthropic", "claude-sonnet-4-5"),
+            )
+            await db.commit()
+
+        resp = await self.client.post(
+            "/api/companies/vet",
+            data={"company_name": "CachedCo", "provider": "anthropic"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["cached"])
+        self.assertEqual(data["risk_level"], "medium")
+
+    async def test_vet_company_force_bypasses_cache(self):
+        """POST /api/companies/vet with force=true skips the cache and re-runs LLM."""
+        import aiosqlite
+        async with aiosqlite.connect(os.environ["DB_PATH"]) as db:
+            await db.execute(
+                """INSERT INTO company_meta
+                   (company_name, llm_risk_level, llm_assessment, llm_signals,
+                    llm_provider, llm_model, llm_assessed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+                ("ForceCo", "low", "Old result.", "[]", "anthropic", "claude-sonnet-4-5"),
+            )
+            await db.commit()
+
+        from unittest.mock import patch, AsyncMock
+        new_result = {
+            "risk_level": "high", "assessment": "Fresh result.",
+            "signals": ["new signal"], "company": "ForceCo",
+            "provider": "anthropic", "model": "claude-sonnet-4-5",
+        }
+        with patch("main.vet_company", new=AsyncMock(return_value=new_result)), \
+             patch("main.crawl_company", new=AsyncMock(return_value={})):
+            resp = await self.client.post(
+                "/api/companies/vet",
+                data={"company_name": "ForceCo", "provider": "anthropic", "force": "true"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertFalse(data["cached"])
+        self.assertEqual(data["risk_level"], "high")
+        self.assertEqual(data["assessment"], "Fresh result.")
+
+    async def test_vet_company_llm_error_returns_422(self):
+        """POST /api/companies/vet returns 422 when LLM raises ValueError."""
+        from unittest.mock import patch, AsyncMock
+        with patch("main.vet_company", new=AsyncMock(side_effect=ValueError("API key not set"))), \
+             patch("main.crawl_company", new=AsyncMock(return_value={})):
+            resp = await self.client.post(
+                "/api/companies/vet",
+                data={"company_name": "ErrorCo", "provider": "anthropic"},
+            )
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("error", resp.json())

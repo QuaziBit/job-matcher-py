@@ -115,7 +115,13 @@ async def init_db():
                 linkedin_founded TEXT DEFAULT '',
                 bbb_url TEXT DEFAULT '',
                 bbb_rating TEXT DEFAULT '',
-                crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                llm_assessment TEXT DEFAULT NULL,
+                llm_risk_level TEXT DEFAULT NULL,
+                llm_signals TEXT DEFAULT NULL,
+                llm_provider TEXT DEFAULT NULL,
+                llm_model TEXT DEFAULT NULL,
+                llm_assessed_at TIMESTAMP DEFAULT NULL
             );
 
             CREATE TABLE IF NOT EXISTS domain_mx_cache (
@@ -142,6 +148,12 @@ async def init_db():
             "ALTER TABLE analyses ADD COLUMN duration_seconds INTEGER DEFAULT 0",
             "ALTER TABLE analyses ADD COLUMN analysis_mode TEXT DEFAULT 'standard'",
             "ALTER TABLE jobs ADD COLUMN salary_estimate TEXT DEFAULT ''",
+            "ALTER TABLE company_meta ADD COLUMN llm_assessment TEXT DEFAULT NULL",
+            "ALTER TABLE company_meta ADD COLUMN llm_risk_level TEXT DEFAULT NULL",
+            "ALTER TABLE company_meta ADD COLUMN llm_signals TEXT DEFAULT NULL",
+            "ALTER TABLE company_meta ADD COLUMN llm_provider TEXT DEFAULT NULL",
+            "ALTER TABLE company_meta ADD COLUMN llm_model TEXT DEFAULT NULL",
+            "ALTER TABLE company_meta ADD COLUMN llm_assessed_at TIMESTAMP DEFAULT NULL",
         ]:
             try:
                 await db.execute(migration)
@@ -157,6 +169,8 @@ COMPANY_META_FIELDS = [
     "linkedin_url", "linkedin_employee_count", "linkedin_founded",
     "bbb_url", "bbb_rating",
     "crawled_at",
+    "llm_assessment", "llm_risk_level", "llm_signals",
+    "llm_provider", "llm_model", "llm_assessed_at",
 ]
 
 
@@ -185,5 +199,34 @@ async def upsert_company_meta(company_name: str, data: dict) -> None:
         await db.execute(
             f"INSERT OR REPLACE INTO company_meta ({cols}) VALUES ({placeholders})",
             values,
+        )
+        await db.commit()
+
+
+async def upsert_company_vetting(
+    company_name: str,
+    risk_level: str,
+    assessment: str,
+    signals: list,
+    provider: str,
+    model: str,
+) -> None:
+    """Update the LLM vetting columns for an existing company_meta row.
+    Creates the row if it doesn't exist yet."""
+    import json as _json
+    signals_json = _json.dumps(signals) if signals else "[]"
+    async with aiosqlite.connect(_db_path()) as db:
+        await db.execute(
+            """INSERT INTO company_meta (company_name, llm_risk_level, llm_assessment,
+               llm_signals, llm_provider, llm_model, llm_assessed_at)
+               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(company_name) DO UPDATE SET
+                   llm_risk_level  = excluded.llm_risk_level,
+                   llm_assessment  = excluded.llm_assessment,
+                   llm_signals     = excluded.llm_signals,
+                   llm_provider    = excluded.llm_provider,
+                   llm_model       = excluded.llm_model,
+                   llm_assessed_at = excluded.llm_assessed_at""",
+            (company_name, risk_level, assessment, signals_json, provider, model),
         )
         await db.commit()
