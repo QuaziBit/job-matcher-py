@@ -1457,6 +1457,67 @@ test("vetCompany reads model from vetting-model-select", () => {
   assertContains(div.innerHTML, 'vetting-model-select');
 });
 
+
+section("toggleSnippetInput");
+test("shows snippet area on first click", () => {
+  document.body.insertAdjacentHTML('beforeend', '<div id="snippet-area-TestId" style="display:none;"></div>');
+  toggleSnippetInput("TestId");
+  const visible = document.getElementById("snippet-area-TestId").style.display !== 'none';
+  document.getElementById("snippet-area-TestId").remove();
+  assertEqual(visible, true);
+});
+test("hides snippet area on second click", () => {
+  document.body.insertAdjacentHTML('beforeend', '<div id="snippet-area-TestId2" style="display:none;"></div>');
+  toggleSnippetInput("TestId2"); // show
+  toggleSnippetInput("TestId2"); // hide
+  const hidden = document.getElementById("snippet-area-TestId2").style.display === 'none';
+  document.getElementById("snippet-area-TestId2").remove();
+  assertEqual(hidden, true);
+});
+
+section("renderCompaniesView — snippet paste button");
+test("renders Paste button",  () => assertContains(renderCompaniesView([BASE_COMPANY]), "📋 Paste"));
+test("renders snippet area",  () => assertContains(renderCompaniesView([BASE_COMPANY]), "snippet-area-"));
+test("snippet area hidden by default", () => assertContains(renderCompaniesView([BASE_COMPANY]), 'display:none'));
+
+
+section("toggleManualForm");
+test("shows manual form on first click", () => {
+  document.body.insertAdjacentHTML('beforeend', '<div id="manual-form-MF1" style="display:none;"></div>');
+  toggleManualForm("MF1");
+  const visible = document.getElementById("manual-form-MF1").style.display !== 'none';
+  document.getElementById("manual-form-MF1").remove();
+  assertEqual(visible, true);
+});
+test("hides manual form on second click", () => {
+  document.body.insertAdjacentHTML('beforeend', '<div id="manual-form-MF2" style="display:none;"></div>');
+  toggleManualForm("MF2");
+  toggleManualForm("MF2");
+  const hidden = document.getElementById("manual-form-MF2").style.display === 'none';
+  document.getElementById("manual-form-MF2").remove();
+  assertEqual(hidden, true);
+});
+test("closes snippet area when opening manual form", () => {
+  document.body.insertAdjacentHTML('beforeend',
+    '<div id="manual-form-MF3" style="display:none;"></div>' +
+    '<div id="snippet-area-MF3" style="display:block;"></div>');
+  toggleManualForm("MF3");
+  const snippetHidden = document.getElementById("snippet-area-MF3").style.display === 'none';
+  document.getElementById("manual-form-MF3").remove();
+  document.getElementById("snippet-area-MF3").remove();
+  assertEqual(snippetHidden, true);
+});
+
+section("renderCompaniesView — manual form");
+test("renders Manual button",         () => assertContains(renderCompaniesView([BASE_COMPANY]), "✏️ Manual"));
+test("renders manual form area",      () => assertContains(renderCompaniesView([BASE_COMPANY]), "manual-form-"));
+test("manual form hidden by default", () => assertContains(renderCompaniesView([BASE_COMPANY]), "manual-form-"));
+test("renders glassdoor rating input",() => assertContains(renderCompaniesView([BASE_COMPANY]), "mf-gd-rating-"));
+test("renders indeed rating input",   () => assertContains(renderCompaniesView([BASE_COMPANY]), "mf-in-rating-"));
+test("renders bbb grade input",       () => assertContains(renderCompaniesView([BASE_COMPANY]), "mf-bbb-rating-"));
+test("renders URL inputs",            () => assertContains(renderCompaniesView([BASE_COMPANY]), "mf-glassdoor-url-"));
+test("renders Save button",           () => assertContains(renderCompaniesView([BASE_COMPANY]), "💾 Save"));
+
     resultsEl.insertAdjacentHTML("beforeend", `<div class="section">── ${item.name}</div>`);
   } else if (item.type === "pass") {
     resultsEl.insertAdjacentHTML("beforeend", `<div class="pass">  ✓ ${item.name}</div>`);

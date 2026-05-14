@@ -15,6 +15,7 @@ from scraper import scrape_job, assess_job_text_quality
 from company_crawler import crawl_company
 from mx_validator import validate_email_domain
 from analyzer.company_vetter import vet_company, CACHE_TTL_DAYS
+from analyzer.snippet_parser import parse_company_snippet
 from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model, BLOCKER_KEYWORDS
 from analyzer.config import anthropic_model, openai_model, gemini_model
 from analyzer.known_models import KNOWN_MODELS
@@ -1009,6 +1010,149 @@ async def get_company_meta_endpoint(company_name: str = ""):
     if row is None:
         return JSONResponse({"ok": True, "cached": False, "company_name": company_name})
     return JSONResponse({"ok": True, "cached": True, **row})
+
+
+@app.post("/api/companies/meta/update")
+async def update_company_meta_endpoint(
+    company_name:          str  = Form(""),
+    glassdoor_rating:      str  = Form(""),
+    glassdoor_review_count:str  = Form(""),
+    glassdoor_url:         str  = Form(""),
+    indeed_rating:         str  = Form(""),
+    indeed_review_count:   str  = Form(""),
+    indeed_url:            str  = Form(""),
+    bbb_rating:            str  = Form(""),
+    bbb_url:               str  = Form(""),
+    linkedin_url:          str  = Form(""),
+):
+    """
+    Manually update company_meta fields — ratings, review counts, and URLs.
+    Only non-empty fields are written. Zero network requests.
+    """
+    company_name = company_name.strip()
+    if not company_name:
+        return JSONResponse({"error": "company_name is required."}, status_code=422)
+
+    data = {}
+
+    # Ratings
+    if glassdoor_rating.strip():
+        try:
+            v = float(glassdoor_rating.strip())
+            if 1.0 <= v <= 5.0:
+                data["glassdoor_rating"] = v
+            else:
+                return JSONResponse({"error": "glassdoor_rating must be between 1 and 5."}, status_code=422)
+        except ValueError:
+            return JSONResponse({"error": "glassdoor_rating must be a number."}, status_code=422)
+
+    if glassdoor_review_count.strip():
+        try:
+            data["glassdoor_review_count"] = int(glassdoor_review_count.strip())
+        except ValueError:
+            return JSONResponse({"error": "glassdoor_review_count must be an integer."}, status_code=422)
+
+    if indeed_rating.strip():
+        try:
+            v = float(indeed_rating.strip())
+            if 1.0 <= v <= 5.0:
+                data["indeed_rating"] = v
+            else:
+                return JSONResponse({"error": "indeed_rating must be between 1 and 5."}, status_code=422)
+        except ValueError:
+            return JSONResponse({"error": "indeed_rating must be a number."}, status_code=422)
+
+    if indeed_review_count.strip():
+        try:
+            data["indeed_review_count"] = int(indeed_review_count.strip())
+        except ValueError:
+            return JSONResponse({"error": "indeed_review_count must be an integer."}, status_code=422)
+
+    # BBB grade
+    if bbb_rating.strip():
+        data["bbb_rating"] = bbb_rating.strip().upper()
+
+    # URLs — basic validation
+    for field, val in [
+        ("glassdoor_url", glassdoor_url),
+        ("indeed_url",    indeed_url),
+        ("bbb_url",       bbb_url),
+        ("linkedin_url",  linkedin_url),
+    ]:
+        val = val.strip()
+        if val:
+            if not val.startswith("http"):
+                return JSONResponse({"error": f"{field} must start with http:// or https://"}, status_code=422)
+            data[field] = val
+
+    if not data:
+        return JSONResponse({"error": "No fields provided to update."}, status_code=422)
+
+    await upsert_company_meta(company_name, data)
+    row = await get_company_meta(company_name) or {}
+
+    logger.info(f"✓ update_company_meta: company={company_name!r} fields={list(data.keys())}")
+    return JSONResponse({
+        "ok":     True,
+        "company": company_name,
+        "updated": list(data.keys()),
+        "meta":   row,
+    })
+
+
+@app.post("/api/companies/parse-snippet")
+async def parse_company_snippet_endpoint(
+    company_name: str = Form(""),
+    text:         str = Form(""),
+    provider:     str = Form("anthropic"),
+    model:        str = Form(""),
+):
+    """
+    Parse a pasted Google search snippet to extract company ratings.
+    The user searches Google for "Company reviews site:glassdoor.com OR site:bbb.org"
+    and pastes the raw text. The LLM extracts structured rating data.
+    No scraping — zero bot detection risk.
+    """
+    company_name = company_name.strip()
+    text         = text.strip()
+    provider     = provider.strip().lower() or "anthropic"
+    model        = model.strip()
+
+    if not company_name:
+        return JSONResponse({"error": "company_name is required."}, status_code=422)
+    if not text:
+        return JSONResponse({"error": "text is required."}, status_code=422)
+    if len(text) > 5000:
+        return JSONResponse({"error": "text too long (max 5000 chars)."}, status_code=422)
+
+    try:
+        data = await parse_company_snippet(text, provider, model)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except Exception as e:
+        logger.error(f"✗ parse_company_snippet({company_name!r}): {e}")
+        return JSONResponse({"error": "Parsing failed — please try again."}, status_code=500)
+
+    if not data:
+        return JSONResponse({
+            "ok":      True,
+            "company": company_name,
+            "found":   False,
+            "message": "No rating data could be extracted from the pasted text.",
+        })
+
+    # Merge into company_meta
+    await upsert_company_meta(company_name, data)
+    row = await get_company_meta(company_name) or {}
+
+    logger.info(f"✓ parse_company_snippet: company={company_name!r} fields={list(data.keys())}")
+    return JSONResponse({
+        "ok":      True,
+        "company": company_name,
+        "found":   True,
+        "data":    data,
+        "meta":    row,
+    })
 
 
 @app.post("/api/companies/vet")

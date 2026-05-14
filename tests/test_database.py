@@ -58,7 +58,8 @@ class TestDatabase(unittest.TestCase):
 
         columns = run(ops())
         for col in ("llm_assessment", "llm_risk_level", "llm_signals",
-                    "llm_provider", "llm_model", "llm_assessed_at"):
+                    "llm_provider", "llm_model", "llm_assessed_at",
+                    "indeed_url", "indeed_rating", "indeed_review_count"):
             self.assertIn(col, columns, f"Missing column: {col}")
 
     def test_llm_columns_added_via_migration_to_existing_db(self):

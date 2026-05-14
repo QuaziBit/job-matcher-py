@@ -115,6 +115,9 @@ async def init_db():
                 linkedin_founded TEXT DEFAULT '',
                 bbb_url TEXT DEFAULT '',
                 bbb_rating TEXT DEFAULT '',
+                indeed_url TEXT DEFAULT '',
+                indeed_rating REAL DEFAULT NULL,
+                indeed_review_count INTEGER DEFAULT NULL,
                 crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 llm_assessment TEXT DEFAULT NULL,
                 llm_risk_level TEXT DEFAULT NULL,
@@ -154,6 +157,9 @@ async def init_db():
             "ALTER TABLE company_meta ADD COLUMN llm_provider TEXT DEFAULT NULL",
             "ALTER TABLE company_meta ADD COLUMN llm_model TEXT DEFAULT NULL",
             "ALTER TABLE company_meta ADD COLUMN llm_assessed_at TIMESTAMP DEFAULT NULL",
+            "ALTER TABLE company_meta ADD COLUMN indeed_url TEXT DEFAULT ''",
+            "ALTER TABLE company_meta ADD COLUMN indeed_rating REAL DEFAULT NULL",
+            "ALTER TABLE company_meta ADD COLUMN indeed_review_count INTEGER DEFAULT NULL",
         ]:
             try:
                 await db.execute(migration)
@@ -168,6 +174,7 @@ COMPANY_META_FIELDS = [
     "glassdoor_url", "glassdoor_rating", "glassdoor_review_count",
     "linkedin_url", "linkedin_employee_count", "linkedin_founded",
     "bbb_url", "bbb_rating",
+    "indeed_url", "indeed_rating", "indeed_review_count",
     "crawled_at",
     "llm_assessment", "llm_risk_level", "llm_signals",
     "llm_provider", "llm_model", "llm_assessed_at",

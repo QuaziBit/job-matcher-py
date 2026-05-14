@@ -2215,3 +2215,144 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(resp.status_code, 422)
         self.assertIn("error", resp.json())
+
+    # ── POST /api/companies/parse-snippet ─────────────────────────────────────
+
+    async def test_parse_snippet_empty_company_returns_422(self):
+        resp = await self.client.post(
+            "/api/companies/parse-snippet",
+            data={"text": "Glassdoor 4.2 stars", "provider": "anthropic"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_parse_snippet_empty_text_returns_422(self):
+        resp = await self.client.post(
+            "/api/companies/parse-snippet",
+            data={"company_name": "Acme", "text": "", "provider": "anthropic"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_parse_snippet_text_too_long_returns_422(self):
+        resp = await self.client.post(
+            "/api/companies/parse-snippet",
+            data={"company_name": "Acme", "text": "x" * 6000, "provider": "anthropic"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_parse_snippet_returns_structured_result(self):
+        from unittest.mock import patch, AsyncMock
+        mock_data = {"glassdoor_rating": 4.2, "glassdoor_review_count": 500,
+                     "bbb_rating": "A+"}
+        with patch("main.parse_company_snippet", new=AsyncMock(return_value=mock_data)):
+            resp = await self.client.post(
+                "/api/companies/parse-snippet",
+                data={"company_name": "Acme", "text": "some snippet text",
+                      "provider": "anthropic"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["found"])
+        self.assertEqual(body["data"]["glassdoor_rating"], 4.2)
+
+    async def test_parse_snippet_empty_result_returns_not_found(self):
+        from unittest.mock import patch, AsyncMock
+        with patch("main.parse_company_snippet", new=AsyncMock(return_value={})):
+            resp = await self.client.post(
+                "/api/companies/parse-snippet",
+                data={"company_name": "Ghost", "text": "blah blah",
+                      "provider": "anthropic"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertFalse(body["found"])
+
+    async def test_parse_snippet_llm_error_returns_422(self):
+        from unittest.mock import patch, AsyncMock
+        with patch("main.parse_company_snippet",
+                   new=AsyncMock(side_effect=ValueError("API key not set"))):
+            resp = await self.client.post(
+                "/api/companies/parse-snippet",
+                data={"company_name": "Acme", "text": "some text",
+                      "provider": "anthropic"},
+            )
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("error", resp.json())
+
+    # ── POST /api/companies/meta/update ──────────────────────────────────────
+
+    async def test_update_meta_empty_company_returns_422(self):
+        resp = await self.client.post(
+            "/api/companies/meta/update",
+            data={"glassdoor_rating": "4.2"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_update_meta_no_fields_returns_422(self):
+        resp = await self.client.post(
+            "/api/companies/meta/update",
+            data={"company_name": "Acme"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_update_meta_invalid_rating_returns_422(self):
+        resp = await self.client.post(
+            "/api/companies/meta/update",
+            data={"company_name": "Acme", "glassdoor_rating": "99"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_update_meta_invalid_url_returns_422(self):
+        resp = await self.client.post(
+            "/api/companies/meta/update",
+            data={"company_name": "Acme", "glassdoor_url": "not-a-url"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_update_meta_saves_rating(self):
+        resp = await self.client.post(
+            "/api/companies/meta/update",
+            data={"company_name": "RatingCo", "glassdoor_rating": "4.2",
+                  "glassdoor_review_count": "500"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertIn("glassdoor_rating", body["updated"])
+        self.assertEqual(body["meta"]["glassdoor_rating"], 4.2)
+
+    async def test_update_meta_saves_bbb_grade(self):
+        resp = await self.client.post(
+            "/api/companies/meta/update",
+            data={"company_name": "BBBCo", "bbb_rating": "a+"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        # Should be uppercased
+        self.assertEqual(body["meta"]["bbb_rating"], "A+")
+
+    async def test_update_meta_saves_urls(self):
+        resp = await self.client.post(
+            "/api/companies/meta/update",
+            data={"company_name": "URLCo",
+                  "glassdoor_url": "https://glassdoor.com/acme",
+                  "linkedin_url":  "https://linkedin.com/company/acme"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertIn("glassdoor_url", body["updated"])
+        self.assertIn("linkedin_url", body["updated"])
+
+    async def test_update_meta_indeed_rating(self):
+        resp = await self.client.post(
+            "/api/companies/meta/update",
+            data={"company_name": "IndeedCo", "indeed_rating": "3.8",
+                  "indeed_review_count": "150"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["meta"]["indeed_rating"], 3.8)

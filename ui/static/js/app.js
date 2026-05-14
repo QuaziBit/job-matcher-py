@@ -2499,6 +2499,75 @@ function renderCompaniesView(companies) {
         <button class="btn btn-ghost btn-xs" style="font-size:11px;" id="llm-vet-btn-${safeId}"
           onclick="vetCompany('${escHtml(c.company)}', '${safeId}')">🤖 AI Vet</button>
         <span id="crawl-spinner-${safeId}" style="display:none; font-size:11px; color:var(--text-mute);">crawling…</span>
+        <button class="btn btn-ghost btn-xs" style="font-size:11px;"
+          onclick="toggleSnippetInput('${safeId}')">📋 Paste</button>
+        <button class="btn btn-ghost btn-xs" style="font-size:11px;"
+          onclick="toggleManualForm('${safeId}')">✏️ Manual</button>
+      </div>
+      <div id="snippet-area-${safeId}" style="display:none; margin-top:6px;">
+        <div class="text-xs text-dim" style="margin-bottom:4px;">
+          Search Google for <code>${escHtml(c.company)} reviews site:glassdoor.com OR site:bbb.org OR site:indeed.com</code>,
+          select all results text, paste below:
+        </div>
+        <textarea id="snippet-input-${safeId}" rows="4"
+          style="width:100%; font-size:11px; padding:6px; border:1px solid var(--border); border-radius:4px; background:var(--bg2); color:var(--text); resize:vertical;"
+          placeholder="Paste Google search results here…"></textarea>
+        <div style="display:flex; gap:6px; margin-top:4px; align-items:center;">
+          <button class="btn btn-ghost btn-xs" style="font-size:11px;"
+            onclick="parseSnippet('${escHtml(c.company)}', '${safeId}')">🔍 Parse</button>
+          <span id="snippet-spinner-${safeId}" style="display:none; font-size:11px; color:var(--text-mute);">parsing…</span>
+        </div>
+        <div id="snippet-results-${safeId}" style="margin-top:4px;"></div>
+      </div>
+      <div id="manual-form-${safeId}" style="display:none; margin-top:6px;">
+        <div class="text-xs text-dim" style="margin-bottom:6px;">Manually enter ratings and URLs — only filled fields will be saved:</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 8px; margin-bottom:6px;">
+          <div>
+            <div class="text-xs text-dim" style="margin-bottom:2px;">Glassdoor rating (1-5)</div>
+            <input id="mf-gd-rating-${safeId}" type="number" min="1" max="5" step="0.1"
+              class="input input-sm" style="width:100%; font-size:11px; height:24px; padding:2px 6px;"
+              placeholder="e.g. 4.2">
+          </div>
+          <div>
+            <div class="text-xs text-dim" style="margin-bottom:2px;">Glassdoor reviews</div>
+            <input id="mf-gd-reviews-${safeId}" type="number" min="0"
+              class="input input-sm" style="width:100%; font-size:11px; height:24px; padding:2px 6px;"
+              placeholder="e.g. 702">
+          </div>
+          <div>
+            <div class="text-xs text-dim" style="margin-bottom:2px;">Indeed rating (1-5)</div>
+            <input id="mf-in-rating-${safeId}" type="number" min="1" max="5" step="0.1"
+              class="input input-sm" style="width:100%; font-size:11px; height:24px; padding:2px 6px;"
+              placeholder="e.g. 3.8">
+          </div>
+          <div>
+            <div class="text-xs text-dim" style="margin-bottom:2px;">Indeed reviews</div>
+            <input id="mf-in-reviews-${safeId}" type="number" min="0"
+              class="input input-sm" style="width:100%; font-size:11px; height:24px; padding:2px 6px;"
+              placeholder="e.g. 200">
+          </div>
+          <div>
+            <div class="text-xs text-dim" style="margin-bottom:2px;">BBB grade</div>
+            <input id="mf-bbb-rating-${safeId}" type="text"
+              class="input input-sm" style="width:100%; font-size:11px; height:24px; padding:2px 6px;"
+              placeholder="e.g. A+">
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:3px; margin-bottom:6px;">
+          ${['glassdoor','indeed','bbb','linkedin'].map(src => `
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span class="text-xs text-dim" style="width:68px; flex-shrink:0;">${src.charAt(0).toUpperCase()+src.slice(1)} URL:</span>
+              <input id="mf-${src}-url-${safeId}" type="text"
+                class="input input-sm" style="flex:1; font-size:11px; height:24px; padding:2px 6px;"
+                placeholder="https://...">
+            </div>`).join('')}
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button class="btn btn-ghost btn-xs" style="font-size:11px;"
+            onclick="saveManualMeta('${escHtml(c.company)}', '${safeId}')">💾 Save</button>
+          <span id="mf-spinner-${safeId}" style="display:none; font-size:11px; color:var(--text-mute);">saving…</span>
+          <span id="mf-result-${safeId}" style="font-size:11px;"></span>
+        </div>
       </div>
       <div id="crawl-results-${safeId}" style="margin-top:6px;"></div>
       <div id="vet-badge-${safeId}" style="margin-top:6px;">${vetBadge}</div>
@@ -2525,6 +2594,165 @@ function renderCompaniesView(companies) {
 }
 
 // ── Company crawler UI ────────────────────────────────────────────────────────
+
+function toggleManualForm(safeId) {
+  const form    = document.getElementById(`manual-form-${safeId}`);
+  const snippet = document.getElementById(`snippet-area-${safeId}`);
+  if (!form) return;
+  const visible = form.style.display !== 'none';
+  form.style.display = visible ? 'none' : '';
+  // Close snippet area if opening manual form
+  if (!visible && snippet) snippet.style.display = 'none';
+}
+
+async function saveManualMeta(companyName, safeId) {
+  const spinner     = document.getElementById(`mf-spinner-${safeId}`);
+  const resultEl    = document.getElementById(`mf-result-${safeId}`);
+  const crawlResults = document.getElementById(`crawl-results-${safeId}`);
+
+  const fd = new FormData();
+  fd.append('company_name', companyName);
+
+  const fields = {
+    glassdoor_rating:       document.getElementById(`mf-gd-rating-${safeId}`)?.value,
+    glassdoor_review_count: document.getElementById(`mf-gd-reviews-${safeId}`)?.value,
+    indeed_rating:          document.getElementById(`mf-in-rating-${safeId}`)?.value,
+    indeed_review_count:    document.getElementById(`mf-in-reviews-${safeId}`)?.value,
+    bbb_rating:             document.getElementById(`mf-bbb-rating-${safeId}`)?.value,
+    glassdoor_url:          document.getElementById(`mf-glassdoor-url-${safeId}`)?.value,
+    indeed_url:             document.getElementById(`mf-indeed-url-${safeId}`)?.value,
+    bbb_url:                document.getElementById(`mf-bbb-url-${safeId}`)?.value,
+    linkedin_url:           document.getElementById(`mf-linkedin-url-${safeId}`)?.value,
+  };
+
+  let hasAny = false;
+  for (const [key, val] of Object.entries(fields)) {
+    if (val && val.trim()) {
+      fd.append(key, val.trim());
+      hasAny = true;
+    }
+  }
+
+  if (!hasAny) {
+    if (resultEl) resultEl.textContent = 'Nothing to save.';
+    return;
+  }
+
+  if (spinner) spinner.style.display = '';
+  if (resultEl) resultEl.textContent = '';
+
+  try {
+    const res  = await fetch('/api/companies/meta/update', { method: 'POST', body: fd });
+    const data = await res.json();
+    log('saveManualMeta', `status=${res.status} updated=${data.updated}`, data);
+
+    if (!res.ok) {
+      if (resultEl) resultEl.innerHTML = `<span style="color:var(--red);">${escHtml(data.error || 'Save failed.')}</span>`;
+      return;
+    }
+
+    if (resultEl) resultEl.innerHTML = `<span style="color:var(--green, #4caf50);">✓ Saved: ${escHtml((data.updated || []).join(', '))}</span>`;
+
+    // Refresh crawl results
+    if (data.meta && crawlResults) {
+      crawlResults.innerHTML = renderCrawlResults({...data.meta, cached: false});
+    }
+
+    // Collapse form after success
+    setTimeout(() => {
+      const form = document.getElementById(`manual-form-${safeId}`);
+      if (form) form.style.display = 'none';
+      if (resultEl) resultEl.textContent = '';
+    }, 2000);
+
+  } catch(err) {
+    logErr('saveManualMeta', 'fetch threw:', err);
+    if (resultEl) resultEl.innerHTML = `<span class="text-xs text-dim">Network error.</span>`;
+  } finally {
+    if (spinner) spinner.style.display = 'none';
+  }
+}
+
+function toggleSnippetInput(safeId) {
+  const area = document.getElementById(`snippet-area-${safeId}`);
+  if (!area) return;
+  const visible = area.style.display !== 'none';
+  area.style.display = visible ? 'none' : '';
+  if (!visible) {
+    const ta = document.getElementById(`snippet-input-${safeId}`);
+    if (ta) ta.focus();
+  }
+}
+
+async function parseSnippet(companyName, safeId) {
+  const ta      = document.getElementById(`snippet-input-${safeId}`);
+  const spinner = document.getElementById(`snippet-spinner-${safeId}`);
+  const results = document.getElementById(`snippet-results-${safeId}`);
+  const crawlResults = document.getElementById(`crawl-results-${safeId}`);
+  if (!ta || !results) return;
+
+  const text = ta.value.trim();
+  if (!text) { ta.focus(); return; }
+
+  if (spinner) spinner.style.display = '';
+  results.innerHTML = '';
+
+  // Read provider + model from vetting page selectors
+  const providerEl = document.getElementById('vetting-provider-select');
+  const modelEl    = document.getElementById('vetting-model-select');
+  const provider   = providerEl ? providerEl.value : 'anthropic';
+  const model      = modelEl ? (modelEl.value || '') : '';
+
+  try {
+    const fd = new FormData();
+    fd.append('company_name', companyName);
+    fd.append('text', text);
+    fd.append('provider', provider);
+    if (model) fd.append('model', model);
+    const res  = await fetch('/api/companies/parse-snippet', { method: 'POST', body: fd });
+    const data = await res.json();
+    log('parseSnippet', `status=${res.status} found=${data.found}`, data);
+
+    if (!res.ok) {
+      results.innerHTML = `<span class="text-xs" style="color:var(--red);">${escHtml(data.error || 'Parse failed.')}</span>`;
+      return;
+    }
+    if (!data.found) {
+      results.innerHTML = `<span class="text-xs text-dim">${escHtml(data.message || 'No data found.')}</span>`;
+      return;
+    }
+
+    // Show what was extracted
+    const fields = data.data || {};
+    const lines = [];
+    if (fields.glassdoor_rating)      lines.push(`Glassdoor: ⭐ ${fields.glassdoor_rating}${fields.glassdoor_review_count ? ` (${fields.glassdoor_review_count.toLocaleString()} reviews)` : ''}`);
+    if (fields.indeed_rating)         lines.push(`Indeed: ⭐ ${fields.indeed_rating}${fields.indeed_review_count ? ` (${fields.indeed_review_count.toLocaleString()} reviews)` : ''}`);
+    if (fields.bbb_rating)            lines.push(`BBB: ${escHtml(fields.bbb_rating)}`);
+    if (fields.linkedin_employee_count) lines.push(`LinkedIn: ${escHtml(fields.linkedin_employee_count)} employees`);
+
+    results.innerHTML = `<div class="text-xs" style="color:var(--green, #4caf50); margin-top:2px;">
+      ✓ Saved: ${lines.map(escHtml).join(' · ')}
+    </div>`;
+
+    // Refresh crawl results display with updated meta
+    if (data.meta && crawlResults) {
+      crawlResults.innerHTML = renderCrawlResults({...data.meta, cached: false});
+    }
+
+    // Clear textarea and collapse after success
+    ta.value = '';
+    setTimeout(() => {
+      const area = document.getElementById(`snippet-area-${safeId}`);
+      if (area) area.style.display = 'none';
+    }, 2000);
+
+  } catch(err) {
+    logErr('parseSnippet', 'fetch threw:', err);
+    results.innerHTML = `<span class="text-xs text-dim">Network error.</span>`;
+  } finally {
+    if (spinner) spinner.style.display = 'none';
+  }
+}
 
 async function crawlCompany(companyName, safeId) {
   log('crawlCompany', `company="${companyName}" id="${safeId}"`);
