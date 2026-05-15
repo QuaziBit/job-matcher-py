@@ -1541,6 +1541,35 @@ test("crawl-results div present when no meta crawl data", () => {
   assertContains(renderCompaniesView([company]), 'id="crawl-results-');
 });
 
+
+test("toggleManualForm pre-populates glassdoor_rating", () => {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="manual-form-PP1" style="display:none;" data-meta='{"glassdoor_rating":4.2,"bbb_rating":"A+"}'></div>
+    <input id="mf-gd-rating-PP1" type="number">
+    <input id="mf-bbb-rating-PP1" type="text">
+  `);
+  toggleManualForm("PP1");
+  const rating = document.getElementById("mf-gd-rating-PP1").value;
+  const bbb    = document.getElementById("mf-bbb-rating-PP1").value;
+  ["manual-form-PP1","mf-gd-rating-PP1","mf-bbb-rating-PP1"].forEach(id => document.getElementById(id)?.remove());
+  assertEqual(rating, "4.2");
+  assertEqual(bbb, "A+");
+});
+test("toggleManualForm skips empty meta fields", () => {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="manual-form-PP2" style="display:none;" data-meta='{"glassdoor_rating":null}'></div>
+    <input id="mf-gd-rating-PP2" value="existing">
+  `);
+  toggleManualForm("PP2");
+  const val = document.getElementById("mf-gd-rating-PP2").value;
+  ["manual-form-PP2","mf-gd-rating-PP2"].forEach(id => document.getElementById(id)?.remove());
+  assertEqual(val, "existing");
+});
+
+section("renderCompaniesView — reset button");
+test("renders Reset button", () => assertContains(renderCompaniesView([BASE_COMPANY]), "🗑 Reset"));
+test("Reset button calls resetCompanyMeta", () => assertContains(renderCompaniesView([BASE_COMPANY]), "resetCompanyMeta"));
+
 test("renders Manual button",         () => assertContains(renderCompaniesView([BASE_COMPANY]), "✏️ Manual"));
 test("renders manual form area",      () => assertContains(renderCompaniesView([BASE_COMPANY]), "manual-form-"));
 test("manual form hidden by default", () => assertContains(renderCompaniesView([BASE_COMPANY]), "manual-form-"));

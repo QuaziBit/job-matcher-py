@@ -2503,6 +2503,8 @@ function renderCompaniesView(companies) {
           onclick="toggleSnippetInput('${safeId}')">📋 Paste</button>
         <button class="btn btn-ghost btn-xs" style="font-size:11px;"
           onclick="toggleManualForm('${safeId}')">✏️ Manual</button>
+        <button class="btn btn-ghost btn-xs" style="font-size:11px; color:var(--red, #e57373);"
+          onclick="resetCompanyMeta('${escHtml(c.company)}', '${safeId}')">🗑 Reset</button>
       </div>
       <div id="snippet-area-${safeId}" style="display:none; margin-top:6px;">
         <div class="text-xs text-dim" style="margin-bottom:4px;">
@@ -2519,7 +2521,8 @@ function renderCompaniesView(companies) {
         </div>
         <div id="snippet-results-${safeId}" style="margin-top:4px;"></div>
       </div>
-      <div id="manual-form-${safeId}" style="display:none; margin-top:6px;">
+      <div id="manual-form-${safeId}" style="display:none; margin-top:6px;"
+           data-meta="${escHtml(JSON.stringify(meta))}">
         <div class="text-xs text-dim" style="margin-bottom:6px;">Manually enter ratings and URLs — only filled fields will be saved:</div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 8px; margin-bottom:6px;">
           <div>
@@ -2599,6 +2602,39 @@ function renderCompaniesView(companies) {
 
 // ── Company crawler UI ────────────────────────────────────────────────────────
 
+async function resetCompanyMeta(companyName, safeId) {
+  if (!confirm(`Reset all vetting data for "${companyName}"? This cannot be undone.`)) return;
+
+  const crawlResults = document.getElementById(`crawl-results-${safeId}`);
+  const vetBadge     = document.getElementById(`vet-badge-${safeId}`);
+  const vetResults   = document.getElementById(`vet-results-${safeId}`);
+
+  try {
+    const res  = await fetch(`/api/companies/meta?company_name=${encodeURIComponent(companyName)}`, { method: 'DELETE' });
+    const data = await res.json();
+    log('resetCompanyMeta', `status=${res.status}`, data);
+
+    if (!res.ok) {
+      toast('error', data.error || 'Reset failed.');
+      return;
+    }
+
+    if (crawlResults) crawlResults.innerHTML = '';
+    if (vetBadge)     vetBadge.innerHTML = '<span class="vet-badge unknown">⚪ UNKNOWN</span>';
+    if (vetResults)   vetResults.innerHTML = '';
+
+    const snippetArea = document.getElementById(`snippet-area-${safeId}`);
+    const manualForm  = document.getElementById(`manual-form-${safeId}`);
+    if (snippetArea) snippetArea.style.display = 'none';
+    if (manualForm)  manualForm.style.display  = 'none';
+
+    toast('success', `✓ Vetting data cleared for ${companyName}`);
+  } catch(err) {
+    logErr('resetCompanyMeta', 'fetch threw:', err);
+    toast('error', 'Network error.');
+  }
+}
+
 function toggleManualForm(safeId) {
   const form    = document.getElementById(`manual-form-${safeId}`);
   const snippet = document.getElementById(`snippet-area-${safeId}`);
@@ -2607,6 +2643,22 @@ function toggleManualForm(safeId) {
   form.style.display = visible ? 'none' : '';
   // Close snippet area if opening manual form
   if (!visible && snippet) snippet.style.display = 'none';
+  // Pre-populate fields with saved meta on open
+  if (!visible) {
+    try {
+      const meta = JSON.parse(form.dataset.meta || '{}');
+      const set = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+      set(`mf-gd-rating-${safeId}`,      meta.glassdoor_rating);
+      set(`mf-gd-reviews-${safeId}`,     meta.glassdoor_review_count);
+      set(`mf-in-rating-${safeId}`,      meta.indeed_rating);
+      set(`mf-in-reviews-${safeId}`,     meta.indeed_review_count);
+      set(`mf-bbb-rating-${safeId}`,     meta.bbb_rating);
+      set(`mf-glassdoor-url-${safeId}`,  meta.glassdoor_url);
+      set(`mf-indeed-url-${safeId}`,     meta.indeed_url);
+      set(`mf-bbb-url-${safeId}`,        meta.bbb_url);
+      set(`mf-linkedin-url-${safeId}`,   meta.linkedin_url);
+    } catch(e) { /* ignore parse errors */ }
+  }
 }
 
 async function saveManualMeta(companyName, safeId) {

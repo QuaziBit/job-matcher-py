@@ -939,10 +939,12 @@ async def update_job_company(
     """Update the company name of a saved job."""
     company = company.strip()
 
-    async with db.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)) as cur:
+    async with db.execute("SELECT id, company FROM jobs WHERE id = ?", (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
         return JSONResponse({"error": "Job not found."}, status_code=404)
+
+    old_company = (row[1] or "").strip()
 
     try:
         await db.execute("UPDATE jobs SET company = ? WHERE id = ?", (company, job_id))
@@ -950,6 +952,18 @@ async def update_job_company(
     except Exception as e:
         logger.error(f"✗ update_job_company DB error for job {job_id}: {e}")
         return JSONResponse({"error": "Failed to update company."}, status_code=500)
+
+    # Rename company_meta row so vetting/crawl data follows the new name
+    if old_company and company and old_company != company:
+        try:
+            await db.execute(
+                "UPDATE company_meta SET company_name = ? WHERE company_name = ?",
+                (company, old_company),
+            )
+            await db.commit()
+            logger.info(f"✓ company_meta renamed: {old_company!r} → {company!r}")
+        except Exception as e:
+            logger.warning(f"✗ company_meta rename failed: {e}")
 
     logger.info(f"✓ Job {job_id} company updated to: {company!r}")
     return JSONResponse({"ok": True, "company": company})
@@ -1114,6 +1128,21 @@ async def update_company_meta_endpoint(
         "updated": list(data.keys()),
         "meta":   row,
     })
+
+
+@app.delete("/api/companies/meta")
+async def delete_company_meta_endpoint(
+    company_name: str,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Delete all company_meta for a company — ratings, URLs, and LLM vetting."""
+    company_name = company_name.strip()
+    if not company_name:
+        return JSONResponse({"error": "company_name is required."}, status_code=422)
+    await db.execute("DELETE FROM company_meta WHERE company_name = ?", (company_name,))
+    await db.commit()
+    logger.info(f"✓ delete_company_meta: company={company_name!r}")
+    return JSONResponse({"ok": True, "company": company_name})
 
 
 @app.post("/api/companies/parse-snippet")

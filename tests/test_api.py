@@ -2389,3 +2389,64 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         co = next((c for c in companies if c["company"] == "NoCrawlCo"), None)
         self.assertIsNotNone(co)
         self.assertEqual(co["meta"], {})
+
+    # ── DELETE /api/companies/meta ────────────────────────────────────────────
+
+    async def test_delete_company_meta_empty_name_returns_422(self):
+        resp = await self.client.delete("/api/companies/meta?company_name=")
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_delete_company_meta_removes_row(self):
+        await self.client.post("/api/companies/meta/update", data={
+            "company_name": "DeleteMe", "glassdoor_rating": "4.2",
+        })
+        resp = await self.client.get("/api/companies/meta?company_name=DeleteMe")
+        self.assertTrue(resp.json()["cached"])
+        resp = await self.client.delete("/api/companies/meta?company_name=DeleteMe")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["ok"])
+        resp = await self.client.get("/api/companies/meta?company_name=DeleteMe")
+        self.assertFalse(resp.json()["cached"])
+
+    async def test_delete_company_meta_nonexistent_returns_ok(self):
+        resp = await self.client.delete("/api/companies/meta?company_name=GhostCo")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["ok"])
+
+    # ── PATCH /api/jobs/{id}/company — meta rename ───────────────────────────
+
+    async def test_update_company_renames_meta(self):
+        """Renaming a job's company should move company_meta to the new name."""
+        # Add a job
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "OldCo",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        job_id = resp.json()["job_id"]
+        # Seed meta for OldCo
+        await self.client.post("/api/companies/meta/update", data={
+            "company_name": "OldCo", "glassdoor_rating": "4.5",
+        })
+        # Rename company
+        resp = await self.client.patch(f"/api/jobs/{job_id}/company",
+                                       data={"company": "NewCo Inc."})
+        self.assertEqual(resp.status_code, 200)
+        # OldCo meta should be gone
+        resp = await self.client.get("/api/companies/meta?company_name=OldCo")
+        self.assertFalse(resp.json()["cached"])
+        # NewCo Inc. meta should have the rating
+        resp = await self.client.get("/api/companies/meta?company_name=NewCo Inc.")
+        self.assertTrue(resp.json()["cached"])
+        self.assertEqual(resp.json()["glassdoor_rating"], 4.5)
+
+    async def test_update_company_no_meta_is_fine(self):
+        """Renaming a company with no meta row should not error."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "NoMetaCo",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        job_id = resp.json()["job_id"]
+        resp = await self.client.patch(f"/api/jobs/{job_id}/company",
+                                       data={"company": "NoMetaCoNew"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["ok"])
