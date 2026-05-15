@@ -133,7 +133,12 @@ async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
         try:
             placeholders = ",".join(["?"] * len(company_names))
             async with db.execute(
-                f"""SELECT company_name, llm_risk_level, llm_assessment,
+                f"""SELECT company_name,
+                           glassdoor_url, glassdoor_rating, glassdoor_review_count,
+                           linkedin_url, linkedin_employee_count, linkedin_founded,
+                           bbb_url, bbb_rating,
+                           indeed_url, indeed_rating, indeed_review_count,
+                           llm_risk_level, llm_assessment,
                            llm_signals, llm_provider, llm_model, llm_assessed_at
                     FROM company_meta WHERE company_name IN ({placeholders})""",
                 company_names,
@@ -147,12 +152,23 @@ async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
                     except Exception:
                         pass
                     meta_map[row["company_name"]] = {
-                        "llm_risk_level":  row.get("llm_risk_level"),
-                        "llm_assessment":  row.get("llm_assessment"),
-                        "llm_signals":     signals,
-                        "llm_provider":    row.get("llm_provider"),
-                        "llm_model":       row.get("llm_model"),
-                        "llm_assessed_at": row.get("llm_assessed_at"),
+                        "glassdoor_url":          row.get("glassdoor_url") or "",
+                        "glassdoor_rating":        row.get("glassdoor_rating"),
+                        "glassdoor_review_count":  row.get("glassdoor_review_count"),
+                        "linkedin_url":            row.get("linkedin_url") or "",
+                        "linkedin_employee_count": row.get("linkedin_employee_count") or "",
+                        "linkedin_founded":        row.get("linkedin_founded") or "",
+                        "bbb_url":                 row.get("bbb_url") or "",
+                        "bbb_rating":              row.get("bbb_rating") or "",
+                        "indeed_url":              row.get("indeed_url") or "",
+                        "indeed_rating":           row.get("indeed_rating"),
+                        "indeed_review_count":     row.get("indeed_review_count"),
+                        "llm_risk_level":          row.get("llm_risk_level"),
+                        "llm_assessment":          row.get("llm_assessment"),
+                        "llm_signals":             signals,
+                        "llm_provider":            row.get("llm_provider"),
+                        "llm_model":               row.get("llm_model"),
+                        "llm_assessed_at":         row.get("llm_assessed_at"),
                     }
         except Exception as e:
             logger.warning(f"→ could not fetch company_meta for vetting: {e}")

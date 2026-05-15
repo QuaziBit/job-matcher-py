@@ -2569,7 +2569,11 @@ function renderCompaniesView(companies) {
           <span id="mf-result-${safeId}" style="font-size:11px;"></span>
         </div>
       </div>
-      <div id="crawl-results-${safeId}" style="margin-top:6px;"></div>
+      <div id="crawl-results-${safeId}" style="margin-top:6px;">${
+        (meta.glassdoor_rating || meta.indeed_rating || meta.bbb_rating || meta.glassdoor_url)
+          ? renderCrawlResults({...meta, cached: true})
+          : ''
+      }</div>
       <div id="vet-badge-${safeId}" style="margin-top:6px;">${vetBadge}</div>
       <div id="vet-results-${safeId}" style="margin-top:4px;"></div>` : '';
     const flags  = redFlagsFor(c, []);
@@ -2935,7 +2939,7 @@ function renderCrawlResults(data) {
     { label: 'BBB',       url: data.bbb_url,       extra: data.bbb_rating       ? `Grade: ${data.bbb_rating}`  : '' },
   ];
 
-  const found = sources.filter(s => s.url);
+  const found = sources.filter(s => s.url || s.extra);
   if (!found.length) {
     return `<span class="text-xs text-dim">No results found for this company name.</span>`;
   }
@@ -2946,7 +2950,9 @@ function renderCrawlResults(data) {
 
   const links = found.map(s => `
     <span class="crawl-result-item">
-      <a href="${escHtml(s.url)}" target="_blank" rel="noopener noreferrer" class="quick-link">${escHtml(s.label)}</a>
+      ${s.url
+        ? `<a href="${escHtml(s.url)}" target="_blank" rel="noopener noreferrer" class="quick-link">${escHtml(s.label)}</a>`
+        : `<span class="text-xs" style="font-weight:500;">${escHtml(s.label)}</span>`}
       ${s.extra ? `<span class="text-xs text-dim" style="margin-left:3px;">${escHtml(s.extra)}</span>` : ''}
     </span>`).join('');
 

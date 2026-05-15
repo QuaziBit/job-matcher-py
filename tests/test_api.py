@@ -2356,3 +2356,36 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         body = resp.json()
         self.assertTrue(body["ok"])
         self.assertEqual(body["meta"]["indeed_rating"], 3.8)
+
+    async def test_vetting_meta_includes_crawl_fields(self):
+        """GET /api/vetting meta should include crawl fields on page load."""
+        await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "MetaCo",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        await self.client.post("/api/companies/meta/update", data={
+            "company_name":     "MetaCo",
+            "glassdoor_rating": "4.3",
+            "indeed_rating":    "3.9",
+            "bbb_rating":       "A",
+        })
+        resp = await self.client.get("/api/vetting")
+        companies = resp.json()["companies"]
+        metaco = next((c for c in companies if c["company"] == "MetaCo"), None)
+        self.assertIsNotNone(metaco)
+        meta = metaco["meta"]
+        self.assertEqual(meta["glassdoor_rating"], 4.3)
+        self.assertEqual(meta["indeed_rating"], 3.9)
+        self.assertEqual(meta["bbb_rating"], "A")
+
+    async def test_vetting_meta_empty_when_no_crawl_data(self):
+        """GET /api/vetting meta should be empty dict when no company_meta row exists."""
+        await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "NoCrawlCo",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        resp = await self.client.get("/api/vetting")
+        companies = resp.json()["companies"]
+        co = next((c for c in companies if c["company"] == "NoCrawlCo"), None)
+        self.assertIsNotNone(co)
+        self.assertEqual(co["meta"], {})

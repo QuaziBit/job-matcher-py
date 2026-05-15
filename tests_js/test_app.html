@@ -1178,6 +1178,25 @@ test("renders trustpilot rating",       () => assertContains(renderCrawlResults(
 test("renders g2 rating",               () => assertContains(renderCrawlResults(BASE_CRAWL), "4.1"));
 test("shows 'just crawled' when not cached", () => assertContains(renderCrawlResults(BASE_CRAWL), "just crawled"));
 test("shows 'cached' when cached",      () => assertContains(renderCrawlResults({...BASE_CRAWL, cached:true}), "cached"));
+test("shows rating without URL (manual entry)", () => {
+  const r = renderCrawlResults({glassdoor_rating: 4.2, glassdoor_review_count: 100, cached: false});
+  assertContains(r, "4.2");
+  assertContains(r, "100");
+});
+test("shows indeed rating without URL", () => {
+  const r = renderCrawlResults({indeed_rating: 3.8, cached: false});
+  assertContains(r, "3.8");
+});
+test("shows bbb grade without URL", () => {
+  const r = renderCrawlResults({bbb_rating: "A+", cached: false});
+  assertContains(r, "A+");
+});
+test("no-URL entry renders plain label not link", () => {
+  const r = renderCrawlResults({glassdoor_rating: 4.2, cached: false});
+  assertNotContains(r, 'href=');
+  assertContains(r, "Glassdoor");
+});
+
 test("no results message when all empty",() => assertContains(renderCrawlResults({cached:false, company_name:"Ghost"}), "No results found"));
 test("partial results render fine",     () => { const r = renderCrawlResults({...BASE_CRAWL, indeed_url:"", linkedin_url:""}); assertContains(r, "glassdoor.com"); assertNotContains(r, "indeed.com"); });
 test("links open in new tab",           () => assertContains(renderCrawlResults(BASE_CRAWL), 'target="_blank"'));
@@ -1509,6 +1528,19 @@ test("closes snippet area when opening manual form", () => {
 });
 
 section("renderCompaniesView — manual form");
+test("pre-populates crawl results when meta has glassdoor_rating", () => {
+  const company = {...BASE_COMPANY, meta: {glassdoor_rating: 4.2, glassdoor_url: "https://glassdoor.com/acme"}};
+  assertContains(renderCompaniesView([company]), "4.2");
+});
+test("pre-populates crawl results when meta has bbb_rating only", () => {
+  const company = {...BASE_COMPANY, meta: {bbb_rating: "A+"}};
+  assertContains(renderCompaniesView([company]), "A+");
+});
+test("crawl-results div present when no meta crawl data", () => {
+  const company = {...BASE_COMPANY, meta: {}};
+  assertContains(renderCompaniesView([company]), 'id="crawl-results-');
+});
+
 test("renders Manual button",         () => assertContains(renderCompaniesView([BASE_COMPANY]), "✏️ Manual"));
 test("renders manual form area",      () => assertContains(renderCompaniesView([BASE_COMPANY]), "manual-form-"));
 test("manual form hidden by default", () => assertContains(renderCompaniesView([BASE_COMPANY]), "manual-form-"));

@@ -59,6 +59,9 @@ def _parse_snippet_response(raw: str) -> dict:
     """Parse LLM JSON response into structured company data."""
     raw = _strip_thinking(raw).strip()
 
+    if not raw:
+        raise ValueError("LLM returned an empty response — try a different model or provider.")
+
     # Strip markdown fences
     raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
     raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
@@ -66,7 +69,7 @@ def _parse_snippet_response(raw: str) -> dict:
     # Find JSON object
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
-        raise ValueError(f"No JSON found in response: {raw[:200]!r}")
+        raise ValueError(f"No JSON found in response — try a different model or provider. Got: {raw[:100]!r}")
 
     data = json.loads(match.group())
 
@@ -124,11 +127,23 @@ async def parse_company_snippet(
     )
 
     prompt = _build_snippet_prompt(text)
-    logger.info(f"→ parse_company_snippet provider={provider} text_len={len(text)}")
+
+    if provider == "ollama":
+        _model = model or ollama_model()
+    elif provider == "openai":
+        _model = model or openai_model()
+    elif provider == "gemini":
+        _model = model or gemini_model()
+    else:
+        _model = model or anthropic_model()
+    logger.info(f"→ parse_company_snippet provider={provider} model={_model} text_len={len(text)}")
 
     if provider == "ollama":
         _model = model or ollama_model()
         timeout = int(os.getenv("OLLAMA_TIMEOUT", "600"))
+        # Thinking models output <think>...</think> before JSON — need much more tokens.
+        # Non-thinking models get format:json to force clean output.
+        _num_predict = 8192 if is_thinking_model(_model) else 1024
         payload = {
             "model":   _model,
             "messages": [
@@ -136,9 +151,9 @@ async def parse_company_snippet(
                 {"role": "user",   "content": prompt},
             ],
             "stream":  False,
-            "options": {"temperature": 0.0, "num_predict": 400},
+            "options": {"temperature": 0.0, "num_predict": _num_predict},
         }
-        if is_thinking_model(_model):
+        if not is_thinking_model(_model):
             payload["format"] = "json"
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{ollama_base_url()}/api/chat", json=payload)
@@ -199,8 +214,17 @@ async def parse_company_snippet(
         )
         raw = message.content[0].text
 
-    if os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes"):
-        logger.info(f"→ snippet_parser raw body:\n{raw}")
+    logger.info(f"→ snippet_parser raw body (len={len(raw)}):\n{raw}")
+
+    # Retry once on empty or unparseable response — small models are inconsistent
+    if not raw.strip():
+        logger.warning("→ snippet_parser got empty response, retrying once…")
+        if provider == "ollama":
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(f"{ollama_base_url()}/api/chat", json=payload)
+                resp.raise_for_status()
+            raw = resp.json().get("message", {}).get("content", "")
+            logger.info(f"→ snippet_parser retry raw body (len={len(raw)}):\n{raw}")
 
     result = _parse_snippet_response(raw)
     logger.info(f"✓ snippet_parser extracted {len(result)} fields: {list(result.keys())}")

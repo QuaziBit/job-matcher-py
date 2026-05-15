@@ -122,6 +122,34 @@ class TestParseSnippetResponse(unittest.TestCase):
 
 # ── parse_company_snippet ─────────────────────────────────────────────────────
 
+
+    def test_empty_response_raises_clear_message(self):
+        """Empty LLM response should raise a user-friendly error."""
+        from analyzer.snippet_parser import _parse_snippet_response
+        try:
+            _parse_snippet_response("")
+            self.fail("Expected ValueError")
+        except ValueError as e:
+            self.assertIn("empty response", str(e).lower())
+
+    def test_whitespace_only_response_raises_clear_message(self):
+        """Whitespace-only response should raise same error."""
+        from analyzer.snippet_parser import _parse_snippet_response
+        try:
+            _parse_snippet_response("   \n  ")
+            self.fail("Expected ValueError")
+        except ValueError as e:
+            self.assertIn("empty response", str(e).lower())
+
+    def test_no_json_error_has_helpful_message(self):
+        """No JSON in response should suggest trying a different model."""
+        from analyzer.snippet_parser import _parse_snippet_response
+        try:
+            _parse_snippet_response("Sorry, I cannot help with that.")
+            self.fail("Expected ValueError")
+        except ValueError as e:
+            self.assertIn("provider", str(e).lower())
+
 class TestParseCompanySnippet(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_structured_result(self):
@@ -153,3 +181,148 @@ class TestParseCompanySnippet(unittest.IsolatedAsyncioTestCase):
         from analyzer.snippet_parser import _parse_snippet_response
         with self.assertRaises(Exception):
             _parse_snippet_response("")
+
+class TestOllamaPayload(unittest.IsolatedAsyncioTestCase):
+
+    async def test_ollama_non_thinking_uses_format_json(self):
+        """Non-thinking Ollama models should include format=json."""
+        import httpx
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        captured = {}
+
+        async def fake_post(url, json=None, **kwargs):
+            captured['payload'] = json
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": '{"glassdoor_rating": 4.2}'}
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(side_effect=fake_post)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            from analyzer.snippet_parser import parse_company_snippet
+            try:
+                await parse_company_snippet("Glassdoor 4.2", "ollama", "llama3.1:8b")
+            except Exception:
+                pass
+
+        self.assertIn('payload', captured)
+        self.assertEqual(captured['payload'].get('format'), 'json')
+
+    async def test_ollama_thinking_model_skips_format_json(self):
+        """Thinking models should NOT include format=json — they use thinking tags."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        captured = {}
+        async def fake_post(url, json=None, **kwargs):
+            captured['payload'] = json
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {"message": {"content": '{"glassdoor_rating": 4.2}'}}
+            return mock_resp
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(side_effect=fake_post)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            from analyzer.snippet_parser import parse_company_snippet
+            try:
+                await parse_company_snippet("Glassdoor 4.2", "ollama", "deepseek-r1:7b")
+            except Exception:
+                pass
+        self.assertIn('payload', captured)
+        self.assertNotIn('format', captured['payload'])
+
+    async def test_ollama_num_predict_is_600(self):
+        """Ollama calls should use num_predict=600."""
+        import httpx
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        captured = {}
+
+        async def fake_post(url, json=None, **kwargs):
+            captured['payload'] = json
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": '{"glassdoor_rating": 4.2}'}
+            }
+            return mock_resp
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(side_effect=fake_post)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            from analyzer.snippet_parser import parse_company_snippet
+            try:
+                await parse_company_snippet("Glassdoor 4.2", "ollama", "llama3.1:8b")
+            except Exception:
+                pass
+
+        self.assertIn('payload', captured)
+        self.assertEqual(captured['payload'].get('options', {}).get('num_predict'), 1024)
+
+    async def test_ollama_thinking_model_uses_higher_num_predict(self):
+        """Thinking models need higher num_predict to fit think block + JSON."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        captured = {}
+        async def fake_post(url, json=None, **kwargs):
+            captured['payload'] = json
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {"message": {"content": '{"glassdoor_rating": 4.2}'}}
+            return mock_resp
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(side_effect=fake_post)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            from analyzer.snippet_parser import parse_company_snippet
+            try:
+                await parse_company_snippet("Glassdoor 4.2", "ollama", "deepseek-r1:7b")
+            except Exception:
+                pass
+        self.assertIn('payload', captured)
+        num_predict = captured['payload'].get('options', {}).get('num_predict')
+        self.assertGreaterEqual(num_predict, 8192)
+
+    async def test_ollama_retries_on_empty_response(self):
+        """Ollama should retry once if the first response is empty."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        call_count = 0
+
+        async def fake_post(url, json=None, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            # First call returns empty, second returns valid JSON
+            if call_count == 1:
+                mock_resp.json.return_value = {"message": {"content": ""}}
+            else:
+                mock_resp.json.return_value = {
+                    "message": {"content": '{"glassdoor_rating": 4.2, "glassdoor_review_count": 100}'}
+                }
+            return mock_resp
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(side_effect=fake_post)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            from analyzer.snippet_parser import parse_company_snippet
+            result = await parse_company_snippet("Glassdoor 4.2", "ollama", "llama3.1:8b")
+
+        self.assertEqual(call_count, 2)
+        self.assertEqual(result.get("glassdoor_rating"), 4.2)
+
+
