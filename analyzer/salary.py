@@ -10,15 +10,12 @@ import re
 import anthropic
 import httpx
 
-from analyzer.config import ANTHROPIC_MODEL, ollama_base_url, ollama_model, anthropic_model, openai_model, gemini_model
-from analyzer.llm import _strip_thinking
+from analyzer.config import ollama_base_url, ollama_model, anthropic_model, openai_model, gemini_model
+from analyzer.llm import _verbose, _strip_thinking
 
 logger = logging.getLogger("analyzer.salary")
 
 
-def _verbose() -> bool:
-    """Return True if SHOW_MORE_LOGS=true — enables extra salary call logging."""
-    return os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes")
 
 
 def _log_salary(msg: str) -> None:

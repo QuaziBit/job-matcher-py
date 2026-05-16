@@ -37,6 +37,19 @@ class TestBuildCompanyPrompt(unittest.TestCase):
         self.assertIn("4.2", prompt)
         self.assertIn("150", prompt)
 
+    def test_includes_indeed_rating(self):
+        prompt = build_company_prompt("Co", {"indeed_rating": 3.8, "indeed_review_count": 8})
+        self.assertIn("3.8", prompt)
+        self.assertIn("8", prompt)
+
+    def test_indeed_no_listing_when_empty(self):
+        prompt = build_company_prompt("Co", {})
+        self.assertIn("Indeed: no listing found", prompt)
+
+    def test_indeed_listed_no_rating(self):
+        prompt = build_company_prompt("Co", {"indeed_url": "https://indeed.com/cmp/co"})
+        self.assertIn("Indeed: listed but no rating available", prompt)
+
     def test_includes_linkedin_employees(self):
         prompt = build_company_prompt("Co", {"linkedin_employee_count": "501-1000", "linkedin_founded": "2005"})
         self.assertIn("501-1000", prompt)
@@ -177,3 +190,46 @@ class TestVettingConstants(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+class TestVetCompanyOllamaPayload(unittest.IsolatedAsyncioTestCase):
+
+    async def _capture_payload(self, model):
+        """Helper — mocks httpx and returns the payload sent to Ollama."""
+        from unittest.mock import AsyncMock, patch, MagicMock
+        captured = {}
+        async def fake_post(url, json=None, **kwargs):
+            captured['payload'] = json
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": '{"risk_level":"low","assessment":"ok","signals":[]}'}
+            }
+            return mock_resp
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(side_effect=fake_post)
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            from analyzer.company_vetter import _call_vetting_llm
+            try:
+                await _call_vetting_llm("test prompt", "ollama", model)
+            except Exception:
+                pass
+        return captured.get('payload', {})
+
+    async def test_thinking_model_uses_8192_num_predict(self):
+        payload = await self._capture_payload("gemma4:e4b")
+        self.assertEqual(payload.get("options", {}).get("num_predict"), 8192)
+
+    async def test_thinking_model_skips_format_json(self):
+        payload = await self._capture_payload("gemma4:e4b")
+        self.assertNotIn("format", payload)
+
+    async def test_non_thinking_model_uses_600_num_predict(self):
+        payload = await self._capture_payload("llama3.1:8b")
+        self.assertEqual(payload.get("options", {}).get("num_predict"), 600)
+
+    async def test_non_thinking_model_gets_format_json(self):
+        payload = await self._capture_payload("llama3.1:8b")
+        self.assertEqual(payload.get("format"), "json")
+
+

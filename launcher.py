@@ -204,7 +204,6 @@ class LauncherHandler(BaseHTTPRequestHandler):
 
     def _serve_static(self, file_path: str):
         """Serve a static file from launcher_ui/."""
-        import mimetypes
         ext = os.path.splitext(file_path)[1]
         mime = _MIME_TYPES.get(ext, "application/octet-stream")
         try:

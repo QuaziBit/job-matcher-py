@@ -5,7 +5,7 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
@@ -17,10 +17,11 @@ from mx_validator import validate_email_domain
 from analyzer.company_vetter import vet_company, CACHE_TTL_DAYS
 from analyzer.snippet_parser import parse_company_snippet
 from analyzer import analyze_match, estimate_salary, extract_salary, _job_has_salary, _ollama_model, BLOCKER_KEYWORDS
+from analyzer.llm import _verbose
 from analyzer.config import anthropic_model, openai_model, gemini_model
 from analyzer.known_models import KNOWN_MODELS
 from health import run_health_checks
-from utils import build_comparison, format_duration, clean_text
+from utils import build_comparison, clean_text
 
 load_dotenv()
 
@@ -1311,7 +1312,7 @@ async def validate_email_domain_endpoint(
         f"→ MX check: email={email!r} domain={result['domain']!r} "
         f"has_mx={result['has_mx']} cached={result['cached']}"
     )
-    if os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes"):
+    if _verbose():
         logger.info(f"→ MX full result: {result}")
     return JSONResponse(result)
 

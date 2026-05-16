@@ -10,8 +10,7 @@ import anthropic
 import httpx
 
 from analyzer.config import (
-    ANTHROPIC_MODEL, OPENAI_MODEL, GEMINI_MODEL,
-    CLOUD_PROVIDERS, MAX_RETRIES, MODE_CONFIG,
+    MAX_RETRIES, MODE_CONFIG,
     get_mode_config, ollama_base_url, ollama_model,
     anthropic_model, openai_model, gemini_model,
     cap_mode_for_model,

@@ -9,10 +9,9 @@ Results are cached in the domain_mx_cache SQLite table (24-hour TTL).
 
 import asyncio
 import logging
-import os
+from analyzer.llm import _verbose
 import re
 import subprocess
-import sys
 from datetime import datetime, timedelta
 
 import aiosqlite
@@ -20,8 +19,6 @@ import aiosqlite
 logger = logging.getLogger("mx_validator")
 
 
-def _show_more_logs() -> bool:
-    return os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes")
 
 
 # ── MX lookup via nslookup ────────────────────────────────────────────────────
@@ -40,7 +37,7 @@ def _nslookup_mx(domain: str, timeout: int = 5) -> list[str]:
             timeout=timeout,
         )
         output = result.stdout + result.stderr
-        if _show_more_logs():
+        if _verbose():
             logger.info(f"→ nslookup output for {domain}:\n{output.strip()}")
         # Windows: "domain  MX preference = 10, mail exchanger = mx1.example.com"
         windows_hosts = re.findall(

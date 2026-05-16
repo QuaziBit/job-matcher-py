@@ -1566,6 +1566,70 @@ test("toggleManualForm skips empty meta fields", () => {
   assertEqual(val, "existing");
 });
 
+
+section("mergeMeta");
+test("mergeMeta skips null values from incoming", () => {
+  const result = mergeMeta({glassdoor_rating: 4.5, indeed_rating: 3.8},
+                           {glassdoor_rating: null, indeed_rating: 3.9});
+  assertEqual(result.glassdoor_rating, 4.5);  // null did not overwrite
+  assertEqual(result.indeed_rating, 3.9);     // non-null updated
+});
+test("mergeMeta skips undefined values from incoming", () => {
+  const result = mergeMeta({bbb_rating: "A+"}, {bbb_rating: undefined, glassdoor_rating: 4.2});
+  assertEqual(result.bbb_rating, "A+");
+  assertEqual(result.glassdoor_rating, 4.2);
+});
+test("mergeMeta adds new non-null fields", () => {
+  const result = mergeMeta({}, {glassdoor_rating: 4.5, indeed_rating: null});
+  assertEqual(result.glassdoor_rating, 4.5);
+  assertEqual(result.indeed_rating, undefined);
+});
+
+section("toggleManualForm — data-meta sync after parse/save");
+test("data-meta merges new fields without wiping existing", () => {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="manual-form-SYNC1" style="display:none;" data-meta='{"glassdoor_rating":4.5,"indeed_rating":3.8}'></div>
+  `);
+  const form = document.getElementById("manual-form-SYNC1");
+  // Simulate parse returning only glassdoor data (indeed not in snippet)
+  const newData = { glassdoor_rating: 4.7, glassdoor_review_count: 200 };
+  const existing = JSON.parse(form.dataset.meta || '{}');
+  form.dataset.meta = JSON.stringify({...existing, ...newData});
+  const parsed = JSON.parse(form.dataset.meta);
+  document.getElementById("manual-form-SYNC1")?.remove();
+  assertEqual(parsed.glassdoor_rating, 4.7);      // updated
+  assertEqual(parsed.glassdoor_review_count, 200); // new
+  assertEqual(parsed.indeed_rating, 3.8);          // preserved
+});
+test("data-meta overwrite replaces field when new value provided", () => {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="manual-form-SYNC2" style="display:none;" data-meta='{"indeed_rating":3.8}'></div>
+  `);
+  const form = document.getElementById("manual-form-SYNC2");
+  const existing = JSON.parse(form.dataset.meta || '{}');
+  form.dataset.meta = JSON.stringify({...existing, ...{ indeed_rating: 4.1 }});
+  const parsed = JSON.parse(form.dataset.meta);
+  document.getElementById("manual-form-SYNC2")?.remove();
+  assertEqual(parsed.indeed_rating, 4.1);
+});
+
+test("data-meta merges AI Vet LLM result without wiping crawl fields", () => {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="manual-form-VET1" style="display:none;"
+         data-meta='{"glassdoor_rating":4.5,"indeed_rating":3.8}'></div>
+  `);
+  const form = document.getElementById("manual-form-VET1");
+  // Simulate what _vetCompany does on success
+  const existing = JSON.parse(form.dataset.meta || '{}');
+  const vetMeta = { llm_risk_level: "low", llm_assessment: "Looks legit", llm_signals: [] };
+  form.dataset.meta = JSON.stringify({...existing, ...vetMeta});
+  const parsed = JSON.parse(form.dataset.meta);
+  document.getElementById("manual-form-VET1")?.remove();
+  assertEqual(parsed.glassdoor_rating, 4.5);   // preserved
+  assertEqual(parsed.indeed_rating, 3.8);       // preserved
+  assertEqual(parsed.llm_risk_level, "low");    // added
+});
+
 section("renderCompaniesView — reset button");
 test("renders Reset button", () => assertContains(renderCompaniesView([BASE_COMPANY]), "🗑 Reset"));
 test("Reset button calls resetCompanyMeta", () => assertContains(renderCompaniesView([BASE_COMPANY]), "resetCompanyMeta"));

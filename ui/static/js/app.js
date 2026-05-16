@@ -2635,6 +2635,15 @@ async function resetCompanyMeta(companyName, safeId) {
   }
 }
 
+// Merge meta objects, skipping null/undefined values from the incoming update
+function mergeMeta(existing, incoming) {
+  const result = {...existing};
+  for (const [k, v] of Object.entries(incoming)) {
+    if (v !== null && v !== undefined) result[k] = v;
+  }
+  return result;
+}
+
 function toggleManualForm(safeId) {
   const form    = document.getElementById(`manual-form-${safeId}`);
   const snippet = document.getElementById(`snippet-area-${safeId}`);
@@ -2709,9 +2718,13 @@ async function saveManualMeta(companyName, safeId) {
 
     if (resultEl) resultEl.innerHTML = `<span style="color:var(--green, #4caf50);">✓ Saved: ${escHtml((data.updated || []).join(', '))}</span>`;
 
-    // Refresh crawl results
+    // Refresh crawl results using merged meta so other sources aren't wiped
     if (data.meta && crawlResults) {
-      crawlResults.innerHTML = renderCrawlResults({...data.meta, cached: false});
+      const manualForm = document.getElementById(`manual-form-${safeId}`);
+      const existing = manualForm ? JSON.parse(manualForm.dataset.meta || '{}') : {};
+      const mergedMeta = mergeMeta(existing, data.meta);
+      crawlResults.innerHTML = renderCrawlResults({...mergedMeta, cached: false});
+      if (manualForm) manualForm.dataset.meta = JSON.stringify(mergedMeta);
     }
 
     // Collapse form after success
@@ -2790,9 +2803,13 @@ async function parseSnippet(companyName, safeId) {
       ✓ Saved: ${lines.map(escHtml).join(' · ')}
     </div>`;
 
-    // Refresh crawl results display with updated meta
+    // Refresh crawl results using merged meta so other sources aren't wiped
     if (data.meta && crawlResults) {
-      crawlResults.innerHTML = renderCrawlResults({...data.meta, cached: false});
+      const manualForm = document.getElementById(`manual-form-${safeId}`);
+      const existing = manualForm ? JSON.parse(manualForm.dataset.meta || '{}') : {};
+      const mergedMeta = mergeMeta(existing, data.meta);
+      crawlResults.innerHTML = renderCrawlResults({...mergedMeta, cached: false});
+      if (manualForm) manualForm.dataset.meta = JSON.stringify(mergedMeta);
     }
 
     // Clear textarea and collapse after success
@@ -2896,6 +2913,20 @@ async function _vetCompany(companyName, safeId, force) {
       badgeDiv.innerHTML = `<span class="provider-tag" style="cursor:pointer;"
         title="Click to expand AI vetting details"
         onclick="showVetDetails('${escHtml(companyName)}', '${escHtml(safeId)}')">${icon} ${label} <span style="opacity:0.6; font-size:10px;">▾</span></span>`;
+    }
+    // Merge LLM vetting result into data-meta so Manual form pre-fills correctly
+    const manualForm = document.getElementById(`manual-form-${safeId}`);
+    if (manualForm) {
+      const existing = JSON.parse(manualForm.dataset.meta || '{}');
+      const vetMeta = data.meta || {
+        llm_risk_level:  data.risk_level,
+        llm_assessment:  data.assessment,
+        llm_signals:     data.signals,
+        llm_provider:    data.provider,
+        llm_model:       data.model,
+        llm_assessed_at: new Date().toISOString(),
+      };
+      manualForm.dataset.meta = JSON.stringify(mergeMeta(existing, vetMeta));
     }
   } catch(err) {
     logErr('vetCompany', 'fetch threw:', err);

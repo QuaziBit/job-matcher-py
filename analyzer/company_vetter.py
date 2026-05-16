@@ -29,7 +29,7 @@ from analyzer.config import (
     openai_model,
     is_thinking_model,
 )
-from analyzer.llm import _strip_thinking
+from analyzer.llm import _strip_thinking, _verbose
 
 logger = logging.getLogger("company_vetter")
 
@@ -64,6 +64,18 @@ def build_company_prompt(company_name: str, meta: dict) -> str:
         lines.append("Glassdoor: listed but no rating available")
     else:
         lines.append("Glassdoor: no listing found")
+
+    # Indeed
+    in_rating  = meta.get("indeed_rating")
+    in_reviews = meta.get("indeed_review_count")
+    in_url     = (meta.get("indeed_url") or "").strip()
+    if in_rating:
+        rev_str = f" ({in_reviews} reviews)" if in_reviews else ""
+        lines.append(f"Indeed rating: {in_rating}/5{rev_str}")
+    elif in_url:
+        lines.append("Indeed: listed but no rating available")
+    else:
+        lines.append("Indeed: no listing found")
 
     # LinkedIn
     li_employees = (meta.get("linkedin_employee_count") or "").strip()
@@ -173,12 +185,12 @@ async def _call_vetting_llm(prompt: str, provider: str, model: str = "") -> str:
             "stream":  False,
             "options": {
                 "temperature": 0.1,
-                "num_predict": 600 if is_thinking_model(model) else 300,
-                "think":       False,
+                "num_predict": 8192 if is_thinking_model(model) else 600,
             },
         }
-        if is_thinking_model(model):
+        if not is_thinking_model(model):
             payload["format"] = "json"
+            payload["options"]["think"] = False
 
         logger.info(f"→ vetting ollama request: model={model}")
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -195,8 +207,10 @@ async def _call_vetting_llm(prompt: str, provider: str, model: str = "") -> str:
         msg = resp.json().get("message", {})
         raw = msg.get("content") or msg.get("thinking") or ""
         raw = _strip_thinking(raw)
-        if os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes"):
-            logger.info(f"→ vetting ollama raw body:\n{raw}")
+        if _verbose():
+            logger.info(f"→ vetting ollama raw body (len={len(raw)}):\n{raw}")
+        else:
+            logger.info(f"→ vetting ollama raw body (len={len(raw)}): {raw[:200]!r}")
         return raw
 
     elif provider == "openai":
@@ -217,7 +231,7 @@ async def _call_vetting_llm(prompt: str, provider: str, model: str = "") -> str:
             ],
         )
         raw = response.choices[0].message.content or ""
-        if os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes"):
+        if _verbose():
             logger.info(f"→ vetting openai raw body:\n{raw}")
         return raw
 
@@ -242,7 +256,7 @@ async def _call_vetting_llm(prompt: str, provider: str, model: str = "") -> str:
             ),
         )
         raw = response.text or ""
-        if os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes"):
+        if _verbose():
             logger.info(f"→ vetting gemini raw body:\n{raw}")
         return raw
 
@@ -261,7 +275,7 @@ async def _call_vetting_llm(prompt: str, provider: str, model: str = "") -> str:
             messages=[{"role": "user", "content": prompt}],
         )
         raw = message.content[0].text
-        if os.getenv("SHOW_MORE_LOGS", "").lower() in ("1", "true", "yes"):
+        if _verbose():
             logger.info(f"→ vetting anthropic raw body:\n{raw}")
         return raw
 
