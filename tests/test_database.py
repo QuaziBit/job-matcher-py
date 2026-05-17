@@ -120,6 +120,21 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(rows[0]["label"], "DevSecOps v1")
         self.assertIn("Security+", rows[0]["content"])
 
+
+    def test_jobs_table_has_company_url_column(self):
+        """jobs table should have company_url column after migration."""
+        import aiosqlite
+        from database import init_db
+
+        async def ops():
+            await init_db()
+            async with aiosqlite.connect(self.tmp.name) as db:
+                async with db.execute("PRAGMA table_info(jobs)") as cur:
+                    cols = {row[1] for row in await cur.fetchall()}
+                return "company_url" in cols
+
+        self.assertTrue(run(ops()))
+
     def test_job_insert_and_fetch(self):
         import aiosqlite
         from database import init_db

@@ -2450,3 +2450,144 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
                                        data={"company": "NoMetaCoNew"})
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.json()["ok"])
+
+    async def test_update_meta_saves_company_url(self):
+        resp = await self.client.post("/api/companies/meta/update", data={
+            "company_name": "UrlCo",
+            "company_url":  "https://www.urlco.com",
+        })
+        self.assertEqual(resp.status_code, 200)
+        resp = await self.client.get("/api/companies/meta?company_name=UrlCo")
+        self.assertEqual(resp.json().get("company_url"), "https://www.urlco.com")
+
+    async def test_update_meta_invalid_company_url_returns_422(self):
+        resp = await self.client.post("/api/companies/meta/update", data={
+            "company_name": "BadUrlCo",
+            "company_url":  "not-a-url",
+        })
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_update_job_company_url_sets_value(self):
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "UrlJobCo",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        job_id = resp.json()["job_id"]
+        resp = await self.client.patch(f"/api/jobs/{job_id}/company-url",
+                                       data={"company_url": "https://www.urljobco.com"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["company_url"], "https://www.urljobco.com")
+
+    async def test_update_job_company_url_invalid_returns_422(self):
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "BadUrlCo2",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        job_id = resp.json()["job_id"]
+        resp = await self.client.patch(f"/api/jobs/{job_id}/company-url",
+                                       data={"company_url": "not-a-url"})
+        self.assertEqual(resp.status_code, 422)
+
+    async def test_update_job_company_url_syncs_to_company_meta(self):
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "SyncCo",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        job_id = resp.json()["job_id"]
+        await self.client.patch(f"/api/jobs/{job_id}/company-url",
+                                data={"company_url": "https://www.syncco.com"})
+        resp = await self.client.get("/api/companies/meta?company_name=SyncCo")
+        self.assertEqual(resp.json().get("company_url"), "https://www.syncco.com")
+
+    async def test_update_job_company_url_not_found_returns_404(self):
+        resp = await self.client.patch("/api/jobs/99999/company-url",
+                                       data={"company_url": "https://x.com"})
+        self.assertEqual(resp.status_code, 404)
+
+    async def test_add_manual_job_with_company_url(self):
+        """company_url saved on job and synced to company_meta."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "NewCo",
+            "company_url": "https://www.newco.com",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 200)
+        job_id = resp.json()["job_id"]
+        # Check job detail has company_url
+        detail = await self.client.get(f"/api/jobs/{job_id}/detail")
+        self.assertEqual(detail.json()["job"].get("company_url"), "https://www.newco.com")
+        # Check synced to company_meta
+        meta = await self.client.get("/api/companies/meta?company_name=NewCo")
+        self.assertEqual(meta.json().get("company_url"), "https://www.newco.com")
+
+    async def test_add_manual_job_invalid_company_url_ignored(self):
+        """Invalid company_url is silently ignored (not a validation error)."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "IgnoreCo",
+            "company_url": "not-a-url",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 200)
+        job_id = resp.json()["job_id"]
+        detail = await self.client.get(f"/api/jobs/{job_id}/detail")
+        self.assertEqual(detail.json()["job"].get("company_url"), "")
+
+    async def test_job_detail_uses_company_meta_as_source_of_truth(self):
+        """Job detail always shows company_meta.company_url regardless of jobs.company_url."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "TruthCo",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        job_id = resp.json()["job_id"]
+        # Set URL via vetting meta
+        await self.client.post("/api/companies/meta/update", data={
+            "company_name": "TruthCo",
+            "company_url": "https://www.truthco.com",
+        })
+        detail = await self.client.get(f"/api/jobs/{job_id}/detail")
+        self.assertEqual(detail.json()["job"].get("company_url"), "https://www.truthco.com")
+
+    async def test_job_detail_syncs_job_url_to_meta_when_meta_empty(self):
+        """Job with company_url syncs it to company_meta on first detail load."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "SyncCo2",
+            "company_url": "https://www.syncco2.com",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        job_id = resp.json()["job_id"]
+        await self.client.get(f"/api/jobs/{job_id}/detail")
+        meta = await self.client.get("/api/companies/meta?company_name=SyncCo2")
+        self.assertEqual(meta.json().get("company_url"), "https://www.syncco2.com")
+
+    async def test_job_detail_meta_url_takes_precedence_over_job_url(self):
+        """company_meta.company_url overrides jobs.company_url in display."""
+        resp = await self.client.post("/api/jobs/add-manual", data={
+            "title": "Dev", "company": "PrecedenceCo",
+            "company_url": "https://www.old.com",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        job_id = resp.json()["job_id"]
+        # Override via meta
+        await self.client.post("/api/companies/meta/update", data={
+            "company_name": "PrecedenceCo",
+            "company_url": "https://www.new.com",
+        })
+        detail = await self.client.get(f"/api/jobs/{job_id}/detail")
+        self.assertEqual(detail.json()["job"].get("company_url"), "https://www.new.com")
+
+    async def test_update_meta_partial_save_preserves_existing_fields(self):
+        """Saving only linkedin_url should not wipe existing glassdoor_rating."""
+        # First save glassdoor rating
+        await self.client.post("/api/companies/meta/update", data={
+            "company_name": "PreserveCo",
+            "glassdoor_rating": "4.2",
+        })
+        # Then save only linkedin_url
+        await self.client.post("/api/companies/meta/update", data={
+            "company_name": "PreserveCo",
+            "linkedin_url": "https://www.linkedin.com/company/preserveco",
+        })
+        resp = await self.client.get("/api/companies/meta?company_name=PreserveCo")
+        data = resp.json()
+        self.assertEqual(data.get("glassdoor_rating"), 4.2)
+        self.assertEqual(data.get("linkedin_url"), "https://www.linkedin.com/company/preserveco")

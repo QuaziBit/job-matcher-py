@@ -233,3 +233,11 @@ class TestVetCompanyOllamaPayload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.get("format"), "json")
 
 
+
+    def test_includes_company_url_in_prompt(self):
+        prompt = build_company_prompt("Co", {"company_url": "https://www.co.com"})
+        self.assertIn("https://www.co.com", prompt)
+
+    def test_no_company_url_when_empty(self):
+        prompt = build_company_prompt("Co", {})
+        self.assertNotIn("Official website", prompt)

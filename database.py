@@ -63,6 +63,7 @@ async def init_db():
                 title TEXT,
                 company TEXT,
                 location TEXT,
+                company_url TEXT DEFAULT '',
                 raw_description TEXT,
                 scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -117,6 +118,7 @@ async def init_db():
                 bbb_rating TEXT DEFAULT '',
                 indeed_url TEXT DEFAULT '',
                 indeed_rating REAL DEFAULT NULL,
+                company_url TEXT DEFAULT '',
                 indeed_review_count INTEGER DEFAULT NULL,
                 crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 llm_assessment TEXT DEFAULT NULL,
@@ -160,6 +162,8 @@ async def init_db():
             "ALTER TABLE company_meta ADD COLUMN indeed_url TEXT DEFAULT ''",
             "ALTER TABLE company_meta ADD COLUMN indeed_rating REAL DEFAULT NULL",
             "ALTER TABLE company_meta ADD COLUMN indeed_review_count INTEGER DEFAULT NULL",
+"ALTER TABLE jobs ADD COLUMN company_url TEXT DEFAULT ''",
+            "ALTER TABLE company_meta ADD COLUMN company_url TEXT DEFAULT ''",
         ]:
             try:
                 await db.execute(migration)
@@ -175,6 +179,7 @@ COMPANY_META_FIELDS = [
     "linkedin_url", "linkedin_employee_count", "linkedin_founded",
     "bbb_url", "bbb_rating",
     "indeed_url", "indeed_rating", "indeed_review_count",
+    "company_url",
     "crawled_at",
     "llm_assessment", "llm_risk_level", "llm_signals",
     "llm_provider", "llm_model", "llm_assessed_at",
@@ -196,15 +201,27 @@ async def get_company_meta(company_name: str) -> dict | None:
 
 
 async def upsert_company_meta(company_name: str, data: dict) -> None:
-    """Insert or replace company_meta for a given company name.
-    Always writes a row (even on empty crawl) so repeat clicks hit the cache."""
+    """Insert or update only the provided fields in company_meta.
+    Uses ON CONFLICT DO UPDATE so existing columns are preserved."""
     fields = [f for f in COMPANY_META_FIELDS if f != "crawled_at" and f in data]
+    if not fields:
+        # Nothing to write — just ensure the row exists
+        async with aiosqlite.connect(_db_path()) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO company_meta (company_name) VALUES (?)",
+                (company_name,),
+            )
+            await db.commit()
+        return
+    set_clause = ", ".join(f"{f} = excluded.{f}" for f in fields)
     cols = ", ".join(["company_name"] + fields + ["crawled_at"])
     placeholders = ", ".join(["?"] * (len(fields) + 1)) + ", CURRENT_TIMESTAMP"
     values = [company_name] + [data.get(f) for f in fields]
     async with aiosqlite.connect(_db_path()) as db:
         await db.execute(
-            f"INSERT OR REPLACE INTO company_meta ({cols}) VALUES ({placeholders})",
+            f"""INSERT INTO company_meta ({cols}) VALUES ({placeholders})
+               ON CONFLICT(company_name) DO UPDATE SET {set_clause},
+               crawled_at = CURRENT_TIMESTAMP""",
             values,
         )
         await db.commit()

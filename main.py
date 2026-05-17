@@ -135,6 +135,7 @@ async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
             placeholders = ",".join(["?"] * len(company_names))
             async with db.execute(
                 f"""SELECT company_name,
+                           company_url,
                            glassdoor_url, glassdoor_rating, glassdoor_review_count,
                            linkedin_url, linkedin_employee_count, linkedin_founded,
                            bbb_url, bbb_rating,
@@ -153,6 +154,7 @@ async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
                     except Exception:
                         pass
                     meta_map[row["company_name"]] = {
+                        "company_url":             row.get("company_url") or "",
                         "glassdoor_url":          row.get("glassdoor_url") or "",
                         "glassdoor_rating":        row.get("glassdoor_rating"),
                         "glassdoor_review_count":  row.get("glassdoor_review_count"),
@@ -493,6 +495,7 @@ async def add_job_manual(
     company: str = Form(""),
     location: str = Form(""),
     source_url: str = Form(""),
+    company_url: str = Form(""),
     description: str = Form(...),
     db: aiosqlite.Connection = Depends(get_db),
 ):
@@ -509,6 +512,9 @@ async def add_job_manual(
     title         = title.strip()   or "Untitled Job"
     company       = company.strip() or ""
     source_url    = source_url.strip()
+    company_url   = company_url.strip()
+    if company_url and not company_url.startswith(("http://", "https://")):
+        company_url = ""
 
     # Use provided URL if given, otherwise generate a synthetic manual:// URL
     if source_url:
@@ -542,14 +548,27 @@ async def add_job_manual(
 
     try:
         async with db.execute(
-            "INSERT INTO jobs (url, title, company, location, raw_description) VALUES (?, ?, ?, ?, ?)",
-            (job_url, title, company, location.strip(), description),
+            "INSERT INTO jobs (url, title, company, location, company_url, raw_description) VALUES (?, ?, ?, ?, ?, ?)",
+            (job_url, title, company, location.strip(), company_url, description),
         ) as cur:
             job_id = cur.lastrowid
         await db.commit()
     except Exception as e:
         logger.error(f"✗ add_job_manual DB insert error: {e}")
         return JSONResponse({"error": "Failed to save job. Check the terminal for details."}, status_code=500)
+
+    # Sync company_url to company_meta if provided
+    if company and company_url:
+        try:
+            await db.execute(
+                """INSERT INTO company_meta (company_name, company_url)
+                   VALUES (?, ?)
+                   ON CONFLICT(company_name) DO UPDATE SET company_url = excluded.company_url""",
+                (company, company_url),
+            )
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"✗ add_job_manual company_meta sync failed: {e}")
 
     return JSONResponse({"job_id": job_id, "title": title, "company": company})
 
@@ -995,6 +1014,49 @@ async def update_job_location(
     return JSONResponse({"ok": True, "location": location})
 
 
+@app.patch("/api/jobs/{job_id}/company-url")
+async def update_job_company_url(
+    job_id: int,
+    company_url: str = Form(""),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Update the company URL for a saved job and sync to company_meta."""
+    company_url = company_url.strip()
+    if company_url and not company_url.startswith(("http://", "https://")):
+        return JSONResponse({"error": "company_url must start with http:// or https://"}, status_code=422)
+
+    async with db.execute("SELECT id, company FROM jobs WHERE id = ?", (job_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return JSONResponse({"error": "Job not found."}, status_code=404)
+
+    job_company = (row[1] or "").strip()
+
+    try:
+        await db.execute("UPDATE jobs SET company_url = ? WHERE id = ?", (company_url, job_id))
+        await db.commit()
+    except Exception as e:
+        logger.error(f"✗ update_job_company_url DB error for job {job_id}: {e}")
+        return JSONResponse({"error": "Failed to update company URL."}, status_code=500)
+
+    # Sync to company_meta so vetting page sees it too
+    if job_company and company_url:
+        try:
+            await db.execute(
+                """INSERT INTO company_meta (company_name, company_url)
+                   VALUES (?, ?)
+                   ON CONFLICT(company_name) DO UPDATE SET company_url = excluded.company_url""",
+                (job_company, company_url),
+            )
+            await db.commit()
+            logger.info(f"✓ company_meta company_url synced for {job_company!r}")
+        except Exception as e:
+            logger.warning(f"✗ company_meta company_url sync failed: {e}")
+
+    logger.info(f"✓ Job {job_id} company_url updated to: {company_url!r}")
+    return JSONResponse({"ok": True, "company_url": company_url})
+
+
 @app.post("/api/companies/crawl")
 async def crawl_company_endpoint(company_name: str = Form("")):
     """
@@ -1055,6 +1117,7 @@ async def update_company_meta_endpoint(
     bbb_rating:            str  = Form(""),
     bbb_url:               str  = Form(""),
     linkedin_url:          str  = Form(""),
+    company_url:           str  = Form(""),
 ):
     """
     Manually update company_meta fields — ratings, review counts, and URLs.
@@ -1109,6 +1172,7 @@ async def update_company_meta_endpoint(
         ("indeed_url",    indeed_url),
         ("bbb_url",       bbb_url),
         ("linkedin_url",  linkedin_url),
+        ("company_url",   company_url),
     ]:
         val = val.strip()
         if val:
@@ -1530,6 +1594,28 @@ async def get_job_detail(job_id: int, db: aiosqlite.Connection = Depends(get_db)
     text_quality   = assess_job_text_quality(job.get("raw_description") or "")
     comparison     = build_comparison(analyses)
     last_resume_id = analyses[0]["resume_id"] if analyses else None
+
+    # company_url: single source of truth is company_meta.
+    # If job has a URL but meta doesn't, sync it up first.
+    if job.get("company"):
+        meta_row = await get_company_meta(job["company"])
+        job_url  = (job.get("company_url") or "").strip()
+        meta_url = (meta_row.get("company_url") or "").strip() if meta_row else ""
+        if job_url and not meta_url:
+            try:
+                async with db.execute(
+                    """INSERT INTO company_meta (company_name, company_url)
+                       VALUES (?, ?)
+                       ON CONFLICT(company_name) DO UPDATE SET company_url = excluded.company_url""",
+                    (job["company"], job_url),
+                ) as _:
+                    pass
+                await db.commit()
+                meta_url = job_url
+            except Exception as e:
+                logger.warning(f"✗ get_job_detail company_meta url sync failed: {e}")
+        # Always display from company_meta
+        job["company_url"] = meta_url
 
     salary_data = json.loads(job["salary_estimate"]) if job.get("salary_estimate") else None
     if analyses:

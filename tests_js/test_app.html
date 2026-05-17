@@ -58,6 +58,7 @@
 <input id="paste-company"     type="text"   value="" style="display:none">
 <input id="paste-location"    type="text"   value="" style="display:none">
 <input id="paste-url"         type="text"   value="" style="display:none">
+<input id="paste-company-url"  type="text"   value="" style="display:none">
 <textarea id="paste-description"            style="display:none"></textarea>
 <button id="paste-submit-btn"               style="display:none">Add Job</button>
 <input id="vetting-search"    type="text"   value="" style="display:none">
@@ -512,6 +513,9 @@ test("saveJobField called for company save", () => assertContains(TMPL.pageHeade
 test("saveJobField called for location save",() => assertContains(TMPL.pageHeader({id:7,title:"Dev"}, "not_applied","not applied","",""), "saveJobField(7, 'location'"));
 test("no company — shows placeholder",       () => assertContains(TMPL.pageHeader({id:1,title:"Dev",company:""}, "not_applied","not applied","",""), "no company"));
 test("no location — shows placeholder",      () => assertContains(TMPL.pageHeader({id:1,title:"Dev",location:""}, "not_applied","not applied","",""), "no location"));
+test("company-url edit button present",     () => assertContains(TMPL.pageHeader({id:1,title:"Dev",company_url:"https://co.com"}, "not_applied","not applied","",""), "toggleFieldEdit('company-url')"));
+test("company-url edit row has correct id",  () => assertContains(TMPL.pageHeader({id:1,title:"Dev"}, "not_applied","not applied","",""), 'id="field-edit-row-company-url"'));
+test("saveJobField called for company-url",  () => assertContains(TMPL.pageHeader({id:7,title:"Dev"}, "not_applied","not applied","",""), "saveJobField(7, 'company-url'"));
 test("company value in edit input",          () => assertContains(TMPL.pageHeader({id:1,title:"Dev",company:"Acme"}, "not_applied","not applied","",""), 'id="field-edit-input-company"'));
 test("location value in edit input",         () => assertContains(TMPL.pageHeader({id:1,title:"Dev",location:"DC"}, "not_applied","not applied","",""), 'id="field-edit-input-location"'));
 test("escapes company XSS",                  () => assertNotContains(TMPL.pageHeader({id:1,title:"Dev",company:"<script>"}, "not_applied","not applied","",""), "<script>"));
@@ -548,6 +552,19 @@ test("closes already-open row",      () => { makeFieldEditDOM(); toggleFieldEdit
 test("only one row open at a time",  () => { makeFieldEditDOM(); toggleFieldEdit('title');    toggleFieldEdit('company');  assertEqual(document.getElementById('field-edit-row-title').style.display,    'none'); cleanFieldEditDOM(); });
 test("company row opens correctly",  () => { makeFieldEditDOM(); toggleFieldEdit('company');  assertEqual(document.getElementById('field-edit-row-company').style.display,  'flex'); cleanFieldEditDOM(); });
 test("location row opens correctly", () => { makeFieldEditDOM(); toggleFieldEdit('location'); assertEqual(document.getElementById('field-edit-row-location').style.display, 'flex'); cleanFieldEditDOM(); });
+test("company-url row opens correctly", () => {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="field-edit-row-title" style="display:none;"></div>
+    <div id="field-edit-row-company" style="display:none;"></div>
+    <div id="field-edit-row-location" style="display:none;"></div>
+    <div id="field-edit-row-company-url" style="display:none;"></div>
+  `);
+  toggleFieldEdit('company-url');
+  const row = document.getElementById('field-edit-row-company-url');
+  const visible = row && row.style.display === 'flex';
+  ['title','company','location','company-url'].forEach(f => document.getElementById(`field-edit-row-${f}`)?.remove());
+  assert(visible, 'company-url row should be visible after toggle');
+});
 test("noop for unknown field",       () => { makeFieldEditDOM(); toggleFieldEdit('bogus');    assertEqual(document.getElementById('field-edit-row-title').style.display,    'none'); cleanFieldEditDOM(); });
 
 
@@ -566,6 +583,8 @@ function teardownSaveFetch() { window.fetch = _origFetch; }
 
 test("calls correct URL for title",    async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,title:"X"}) }); await saveJobField(5,'title','X'); assert(_sfFetchCalls.length===1); assertContains(_sfFetchCalls[0].url,'/api/jobs/5/title'); teardownSaveFetch(); });
 test("calls correct URL for company",  async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,company:"X"}) }); await saveJobField(5,'company','X'); assertContains(_sfFetchCalls[0].url,'/api/jobs/5/company'); teardownSaveFetch(); });
+test("calls correct URL for company-url", async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,company_url:"https://x.com"}) }); await saveJobField(5,'company-url','https://x.com'); assertContains(_sfFetchCalls[0].url,'/api/jobs/5/company-url'); teardownSaveFetch(); });
+test("company-url FormData key uses underscore", async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true}) }); await saveJobField(2,'company-url','https://x.com'); const fd = _sfFetchCalls[0].opts.body; assertEqual(fd.get('company_url'),'https://x.com'); teardownSaveFetch(); });
 test("calls correct URL for location", async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,location:"X"}) }); await saveJobField(5,'location','X'); assertContains(_sfFetchCalls[0].url,'/api/jobs/5/location'); teardownSaveFetch(); });
 test("uses PATCH method",              async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true,title:"X"}) }); await saveJobField(3,'title','Dev'); assertEqual(_sfFetchCalls[0].opts.method,'PATCH'); teardownSaveFetch(); });
 test("empty title — no fetch",         async () => { setupSaveFetch({ ok:true, json: async()=>({ok:true}) }); await saveJobField(1,'title','   '); assertEqual(_sfFetchCalls.length, 0); teardownSaveFetch(); });
@@ -880,14 +899,16 @@ test("clears all paste form fields", () => {
   document.getElementById('paste-title').value       = 'Dev';
   document.getElementById('paste-company').value     = 'Acme';
   document.getElementById('paste-location').value    = 'Remote';
-  document.getElementById('paste-url').value         = 'https://example.com';
-  document.getElementById('paste-description').value = 'Some description';
+  document.getElementById('paste-url').value             = 'https://example.com';
+  document.getElementById('paste-company-url').value     = 'https://www.acme.com';
+  document.getElementById('paste-description').value     = 'Some description';
   clearPasteForm();
-  assertEqual(document.getElementById('paste-title').value,       '');
-  assertEqual(document.getElementById('paste-company').value,     '');
-  assertEqual(document.getElementById('paste-location').value,    '');
-  assertEqual(document.getElementById('paste-url').value,         '');
-  assertEqual(document.getElementById('paste-description').value, '');
+  assertEqual(document.getElementById('paste-title').value,           '');
+  assertEqual(document.getElementById('paste-company').value,         '');
+  assertEqual(document.getElementById('paste-location').value,        '');
+  assertEqual(document.getElementById('paste-url').value,             '');
+  assertEqual(document.getElementById('paste-company-url').value,     '');
+  assertEqual(document.getElementById('paste-description').value,     '');
 });
 test("does not throw when fields missing", () => clearPasteForm());
 
@@ -1628,6 +1649,70 @@ test("data-meta merges AI Vet LLM result without wiping crawl fields", () => {
   assertEqual(parsed.glassdoor_rating, 4.5);   // preserved
   assertEqual(parsed.indeed_rating, 3.8);       // preserved
   assertEqual(parsed.llm_risk_level, "low");    // added
+});
+
+section("pageHeader — company_url field");
+test("shows official site link when company_url set", () => {
+  const html = TMPL.pageHeader(
+    {id:1, title:"Dev", company:"Co", location:"VA", url:"manual://1", company_url:"https://www.co.com"},
+    "not_applied", "Not Applied", "", ""
+  );
+  assertContains(html, "Official site");
+  assertContains(html, "www.co.com");
+});
+test("shows no company URL placeholder when empty", () => {
+  const html = TMPL.pageHeader(
+    {id:1, title:"Dev", company:"Co", location:"VA", url:"manual://1", company_url:""},
+    "not_applied", "Not Applied", "", ""
+  );
+  assertContains(html, "no company URL");
+});
+test("company-url edit row exists", () => {
+  const html = TMPL.pageHeader(
+    {id:1, title:"Dev", company:"Co", location:"VA", url:"manual://1", company_url:""},
+    "not_applied", "Not Applied", "", ""
+  );
+  assertContains(html, "field-edit-row-company-url");
+});
+
+section("renderCrawlResults — LinkedIn URL only / company_url");
+test("shows LinkedIn when only URL present (no employee count)", () => {
+  const html = renderCrawlResults({ linkedin_url: "https://linkedin.com/company/co" });
+  assertContains(html, "LinkedIn");
+  assertContains(html, "linkedin.com");
+});
+test("shows Website when company_url set", () => {
+  const html = renderCrawlResults({ company_url: "https://www.co.com" });
+  assertContains(html, "Website");
+  assertContains(html, "www.co.com");
+});
+test("empty string url not shown", () => {
+  const html = renderCrawlResults({ linkedin_url: "", glassdoor_url: "" });
+  assertNotContains(html, "LinkedIn");
+});
+
+test("renders Company URL input in manual form", () => {
+  const html = renderCompaniesView([BASE_COMPANY]);
+  assertContains(html, "mf-company-url-");
+  assertContains(html, "Company URL");
+});
+
+test("shows 🌐 link when company_url in meta", () => {
+  const co = {...BASE_COMPANY, meta: { company_url: "https://www.co.com" }};
+  assertContains(renderCompaniesView([co]), "🌐");
+  assertContains(renderCompaniesView([co]), "www.co.com");
+});
+test("no 🌐 link when company_url empty", () => {
+  assertNotContains(renderCompaniesView([BASE_COMPANY]), "🌐");
+});
+
+test("pre-populates crawl results when meta has linkedin_url only", () => {
+  const co = {...BASE_COMPANY, meta: { linkedin_url: "https://linkedin.com/company/co" }};
+  assertContains(renderCompaniesView([co]), "LinkedIn");
+});
+test("pre-populates crawl results when meta has company_url only", () => {
+  const co = {...BASE_COMPANY, meta: { company_url: "https://www.co.com" }};
+  assertContains(renderCompaniesView([co]), "Website");
 });
 
 section("renderCompaniesView — reset button");

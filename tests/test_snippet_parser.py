@@ -238,8 +238,8 @@ class TestOllamaPayload(unittest.IsolatedAsyncioTestCase):
         self.assertIn('payload', captured)
         self.assertNotIn('format', captured['payload'])
 
-    async def test_ollama_num_predict_is_600(self):
-        """Ollama calls should use num_predict=600."""
+    async def test_ollama_num_predict_is_1024(self):
+        """Ollama non-thinking calls should use num_predict=1024."""
         import httpx
         from unittest.mock import AsyncMock, patch, MagicMock
 

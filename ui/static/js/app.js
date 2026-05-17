@@ -294,7 +294,7 @@ function parseJobHTML() {
 // ── Clear paste / HTML forms ─────────────────────────────────────────────────
 
 function clearPasteForm() {
-  const ids = ['paste-title', 'paste-company', 'paste-location', 'paste-url', 'paste-description'];
+  const ids = ['paste-title', 'paste-company', 'paste-location', 'paste-url', 'paste-company-url', 'paste-description'];
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
@@ -365,6 +365,7 @@ async function addJobManual() {
   const company     = document.getElementById('paste-company').value.trim();
   const location    = (document.getElementById('paste-location') || {value:''}).value.trim();
   const sourceUrl   = (document.getElementById('paste-url')      || {value:''}).value.trim();
+  const companyUrl  = (document.getElementById('paste-company-url') || {value:''}).value.trim();
   const description = document.getElementById('paste-description').value.trim();
   const btn         = document.getElementById('paste-submit-btn');
 
@@ -380,6 +381,7 @@ async function addJobManual() {
   fd.append('company',     company);
   fd.append('location',    location);
   fd.append('source_url',  sourceUrl);
+  fd.append('company_url', companyUrl);
   fd.append('description', description);
 
   try {
@@ -919,7 +921,7 @@ function toggleFieldEdit(field) {
   if (!row) return;
   const visible = row.style.display === 'flex';
   // Close all field edit rows first
-  ['title', 'company', 'location'].forEach(f => {
+  ['title', 'company', 'location', 'company-url'].forEach(f => {
     const r = document.getElementById(`field-edit-row-${f}`);
     if (r) r.style.display = 'none';
   });
@@ -937,7 +939,8 @@ async function saveJobField(jobId, field, value) {
     return;
   }
   const fd = new FormData();
-  fd.append(field, value);
+  // API form param uses underscore; URL path uses hyphen
+  fd.append(field.replace('-', '_'), value);
   try {
     const res  = await fetch(`/api/jobs/${jobId}/${field}`, { method: 'PATCH', body: fd });
     const data = await res.json();
@@ -1752,10 +1755,14 @@ const TMPL = {
           ${job.location
             ? `<span>\u00b7 ${escHtml(job.location)}${editBtn('location', 'location')}</span>`
             : `<span>\u00b7 <span class="text-mute">(no location)</span>${editBtn('location', 'location')}</span>`}
+          ${job.company_url
+            ? `<span>\u00b7 <a href="${escHtml(job.company_url)}" target="_blank" rel="noopener" class="text-dim text-mono text-xs">🌐 Official site</a>${editBtn('company-url', 'company URL')}</span>`
+            : `<span>\u00b7 <span class="text-mute">(no company URL)</span>${editBtn('company-url', 'company URL')}</span>`}
           ${urlHtml}
         </div>
         ${fieldRow('company',  job.company  || '', 'Company name')}
         ${fieldRow('location', job.location || '', 'City, State or Remote')}
+        ${fieldRow('company-url', job.company_url || '', 'https://www.company.com')}
         <div id="url-edit-row" style="display:none; margin-top:8px; display:none;">
           <div class="flex gap-10 items-center" style="max-width:600px;">
             <input id="url-edit-input" type="text" value="${escHtml(currentUrl)}"
@@ -2557,7 +2564,7 @@ function renderCompaniesView(companies) {
           </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:3px; margin-bottom:6px;">
-          ${['glassdoor','indeed','bbb','linkedin'].map(src => `
+          ${['glassdoor','indeed','bbb','linkedin','company'].map(src => `
             <div style="display:flex; align-items:center; gap:6px;">
               <span class="text-xs text-dim" style="width:68px; flex-shrink:0;">${src.charAt(0).toUpperCase()+src.slice(1)} URL:</span>
               <input id="mf-${src}-url-${safeId}" type="text"
@@ -2573,7 +2580,9 @@ function renderCompaniesView(companies) {
         </div>
       </div>
       <div id="crawl-results-${safeId}" style="margin-top:6px;">${
-        (meta.glassdoor_rating || meta.indeed_rating || meta.bbb_rating || meta.glassdoor_url)
+        (meta.glassdoor_rating || meta.indeed_rating || meta.bbb_rating ||
+         meta.glassdoor_url || meta.linkedin_url || meta.indeed_url ||
+         meta.bbb_url || meta.company_url)
           ? renderCrawlResults({...meta, cached: true})
           : ''
       }</div>
@@ -2586,7 +2595,7 @@ function renderCompaniesView(companies) {
       <div class="card" style="margin-bottom:12px;">
         <div class="flex items-center gap-10" style="margin-bottom:${jobCount > 0 ? '10px' : '0'};">
           <div style="flex:1;">
-            <div style="font-weight:500; font-size:15px;">${escHtml(c.company)}</div>
+            <div style="font-weight:500; font-size:15px;">${escHtml(c.company)}${meta.company_url ? ` <a href="${escHtml(meta.company_url)}" target="_blank" rel="noopener" style="font-size:11px; font-weight:normal; color:var(--text-dim); text-decoration:none;" title="${escHtml(meta.company_url)}">🌐</a>` : ''}</div>
             <div class="text-xs text-dim text-mono mt-4">
               ${jobCount} job${jobCount !== 1 ? 's' : ''}
               ${applied > 0 ? ' · ' + applied + ' applied' : ''}
@@ -2666,6 +2675,7 @@ function toggleManualForm(safeId) {
       set(`mf-indeed-url-${safeId}`,     meta.indeed_url);
       set(`mf-bbb-url-${safeId}`,        meta.bbb_url);
       set(`mf-linkedin-url-${safeId}`,   meta.linkedin_url);
+      set(`mf-company-url-${safeId}`,   meta.company_url);
     } catch(e) { /* ignore parse errors */ }
   }
 }
@@ -2688,6 +2698,7 @@ async function saveManualMeta(companyName, safeId) {
     indeed_url:             document.getElementById(`mf-indeed-url-${safeId}`)?.value,
     bbb_url:                document.getElementById(`mf-bbb-url-${safeId}`)?.value,
     linkedin_url:           document.getElementById(`mf-linkedin-url-${safeId}`)?.value,
+    company_url:            document.getElementById(`mf-company-url-${safeId}`)?.value,
   };
 
   let hasAny = false;
@@ -3020,9 +3031,10 @@ function renderCrawlResults(data) {
     { label: 'Trustpilot',url: data.trustpilot_url,extra: data.trustpilot_rating ? `⭐ ${data.trustpilot_rating}` : '' },
     { label: 'G2',        url: data.g2_url,        extra: data.g2_rating        ? `⭐ ${data.g2_rating}`        : '' },
     { label: 'BBB',       url: data.bbb_url,       extra: data.bbb_rating       ? `Grade: ${data.bbb_rating}`  : '' },
+    { label: 'Website',   url: data.company_url,   extra: '' },
   ];
 
-  const found = sources.filter(s => s.url || s.extra);
+  const found = sources.filter(s => (s.url && s.url.trim()) || (s.extra && s.extra.trim()));
   if (!found.length) {
     return `<span class="text-xs text-dim">No results found for this company name.</span>`;
   }

@@ -43,6 +43,11 @@ def build_company_prompt(company_name: str, meta: dict) -> str:
     """Build a vetting prompt from crawled company data."""
     lines = [f"Company name: {company_name}"]
 
+    # Official website
+    co_url = (meta.get("company_url") or "").strip()
+    if co_url:
+        lines.append(f"Official website: {co_url}")
+
     # BBB
     bbb_rating = (meta.get("bbb_rating") or "").strip()
     bbb_url    = (meta.get("bbb_url") or "").strip()
