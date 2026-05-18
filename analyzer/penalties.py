@@ -120,7 +120,7 @@ def validate_llm_output(result: dict, jd: str, resume: str) -> dict:
         errors.append(f"score {score} out of range 1-5")
 
     matched = result.get("matched_skills", [])
-    if len(jd) > 500 and len(matched) == 0:
+    if len(jd) > 500 and len(matched) == 0 and score > 1:
         errors.append("no matched skills despite rich job description")
 
     matched_names = {

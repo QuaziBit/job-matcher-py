@@ -926,3 +926,44 @@ class TestCallOllamaChunked(unittest.TestCase):
         self.assertEqual(result["score"], 4)
         # _call_chunk should have been called (at least chunks 1-3)
         self.assertGreaterEqual(mock_call_chunk.call_count, 3)
+
+class TestValidateLLMOutput(unittest.TestCase):
+
+    def _result(self, score=3, matched=None, missing=None):
+        return {
+            "score": score,
+            "matched_skills": matched if matched is not None else [{"skill": "Python"}],
+            "missing_skills": missing if missing is not None else [],
+            "reasoning": "test",
+        }
+
+    def test_score1_with_no_matched_is_valid(self):
+        """Score=1 with no matched skills is correct for a complete mismatch."""
+        from analyzer.penalties import validate_llm_output
+        result = self._result(score=1, matched=[])
+        out = validate_llm_output(result, "x" * 600, "resume text")
+        self.assertTrue(out["valid"],
+            f"Expected valid for score=1 + no matches, got errors: {out['errors']}")
+
+    def test_score2_with_no_matched_and_rich_jd_is_invalid(self):
+        """Score>1 with no matched skills and rich JD should flag as suspicious."""
+        from analyzer.penalties import validate_llm_output
+        result = self._result(score=2, matched=[])
+        out = validate_llm_output(result, "x" * 600, "resume text")
+        self.assertFalse(out["valid"])
+        self.assertTrue(any("matched" in e for e in out["errors"]))
+
+    def test_score3_with_matched_skills_is_valid(self):
+        from analyzer.penalties import validate_llm_output
+        result = self._result(score=3, matched=[{"skill": "Python"}])
+        out = validate_llm_output(result, "x" * 600, "resume text")
+        self.assertTrue(out["valid"])
+
+    def test_short_jd_no_matched_skills_not_flagged(self):
+        """Short JD (<500 chars) with no matched skills should not flag."""
+        from analyzer.penalties import validate_llm_output
+        result = self._result(score=3, matched=[])
+        out = validate_llm_output(result, "short jd", "resume text")
+        self.assertTrue(out["valid"])
+
+
