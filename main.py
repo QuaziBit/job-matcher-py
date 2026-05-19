@@ -408,6 +408,7 @@ async def save_job_preview(
     title:       str = Form(""),
     company:     str = Form(""),
     location:    str = Form(""),
+    company_url: str = Form(""),
     description: str = Form(...),
     db: aiosqlite.Connection = Depends(get_db),
 ):
@@ -416,6 +417,9 @@ async def save_job_preview(
     title       = title.strip()
     company     = company.strip()
     location    = location.strip()
+    company_url = company_url.strip()
+    if company_url and not company_url.startswith(("http://", "https://")):
+        company_url = ""
     description = clean_text(description.strip())
 
     if len(description) < 50:
@@ -439,14 +443,27 @@ async def save_job_preview(
 
     try:
         async with db.execute(
-            "INSERT INTO jobs (url, title, company, location, raw_description) VALUES (?, ?, ?, ?, ?)",
-            (url, title, company, location, description),
+            "INSERT INTO jobs (url, title, company, location, company_url, raw_description) VALUES (?, ?, ?, ?, ?, ?)",
+            (url, title, company, location, company_url, description),
         ) as cur:
             job_id = cur.lastrowid
         await db.commit()
     except Exception as e:
         logger.error(f"✗ save_job_preview DB insert error: {e}")
         return JSONResponse({"error": "Failed to save job."}, status_code=500)
+
+    # Sync company_url to company_meta
+    if company and company_url:
+        try:
+            await db.execute(
+                """INSERT INTO company_meta (company_name, company_url)
+                   VALUES (?, ?)
+                   ON CONFLICT(company_name) DO UPDATE SET company_url = excluded.company_url""",
+                (company, company_url),
+            )
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"✗ save_job_preview company_meta sync failed: {e}")
 
     logger.info(f"✓ save_job_preview: job {job_id} saved ({len(description)} chars)")
     return JSONResponse({"job_id": job_id, "title": title, "company": company})

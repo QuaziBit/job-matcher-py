@@ -2591,3 +2591,31 @@ class TestEndToEndFlow(unittest.IsolatedAsyncioTestCase):
         data = resp.json()
         self.assertEqual(data.get("glassdoor_rating"), 4.2)
         self.assertEqual(data.get("linkedin_url"), "https://www.linkedin.com/company/preserveco")
+
+    async def test_save_preview_saves_company_url(self):
+        """company_url saved to job and synced to company_meta."""
+        resp = await self.client.post("/api/jobs/save-preview", data={
+            "url": "https://example.com/preview-cu",
+            "title": "Dev", "company": "PreviewCo",
+            "company_url": "https://www.previewco.com",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 200)
+        job_id = resp.json()["job_id"]
+        detail = await self.client.get(f"/api/jobs/{job_id}/detail")
+        self.assertEqual(detail.json()["job"].get("company_url"), "https://www.previewco.com")
+        meta = await self.client.get("/api/companies/meta?company_name=PreviewCo")
+        self.assertEqual(meta.json().get("company_url"), "https://www.previewco.com")
+
+    async def test_save_preview_invalid_company_url_ignored(self):
+        """Invalid company_url in save-preview is silently ignored."""
+        resp = await self.client.post("/api/jobs/save-preview", data={
+            "url": "https://example.com/preview-bad-cu",
+            "title": "Dev", "company": "BadUrlPreviewCo",
+            "company_url": "not-a-url",
+            "description": MOCK_JOB_DEVSECOPS,
+        })
+        self.assertEqual(resp.status_code, 200)
+        job_id = resp.json()["job_id"]
+        detail = await self.client.get(f"/api/jobs/{job_id}/detail")
+        self.assertEqual(detail.json()["job"].get("company_url"), "")

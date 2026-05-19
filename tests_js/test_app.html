@@ -1675,6 +1675,32 @@ test("company-url edit row exists", () => {
   assertContains(html, "field-edit-row-company-url");
 });
 
+section("initJobPreviewPage — source_url and company_url pre-fill");
+test("source_url pre-filled from data.url", () => {
+  document.body.insertAdjacentHTML('beforeend', `
+    <form id="preview-form">
+      <input name="url" value="">
+      <input name="title" value="">
+      <input name="company" value="">
+      <input name="location" value="">
+      <input name="source_url" value="">
+      <input name="company_url" value="">
+      <textarea name="description"></textarea>
+    </form>
+    <span id="preview-char-count"></span>
+  `);
+  const data = { url: "https://jobs.example.com/123", title: "Dev", company: "Co",
+                 location: "VA", company_url: "https://www.co.com", description: "desc" };
+  sessionStorage.setItem("job_preview", JSON.stringify(data));
+  initJobPreviewPage();
+  const srcVal = document.querySelector('[name="source_url"]').value;
+  const coVal  = document.querySelector('[name="company_url"]').value;
+  document.getElementById("preview-form")?.remove();
+  sessionStorage.removeItem("job_preview");
+  assertEqual(srcVal, "https://jobs.example.com/123");
+  assertEqual(coVal, "https://www.co.com");
+});
+
 section("renderCrawlResults — LinkedIn URL only / company_url");
 test("shows LinkedIn when only URL present (no employee count)", () => {
   const html = renderCrawlResults({ linkedin_url: "https://linkedin.com/company/co" });

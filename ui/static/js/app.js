@@ -3561,6 +3561,10 @@ function initJobPreviewPage() {
   form.querySelector('[name="title"]').value       = data.title       || '';
   form.querySelector('[name="company"]').value     = data.company     || '';
   form.querySelector('[name="location"]').value    = data.location    || '';
+  const srcEl = form.querySelector('[name="source_url"]');
+  if (srcEl) srcEl.value = data.url || '';
+  const coUrlEl = form.querySelector('[name="company_url"]');
+  if (coUrlEl) coUrlEl.value = data.company_url || '';
   form.querySelector('[name="description"]').value = data.description || '';
   updateCount();
 
