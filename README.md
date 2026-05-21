@@ -35,6 +35,14 @@
 
 ---
 
+## Support
+
+If this project saved you time or helped you, you can support it here:
+
+☕ https://buymeacoffee.com/QuaziBit
+
+---
+
 ## What It Does
 
 - Scrapes job postings from a URL or accepts pasted/manual job descriptions
