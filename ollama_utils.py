@@ -42,8 +42,6 @@ MODEL_CONTEXT_WINDOWS = {
     # Phi
     "phi3.5:3.8b":       32768,
     "phi4:14b":          16384,
-    # Nemotron
-    "nemotron-3-nano:latest": 16384,
     # Qwen
     "qwen2.5:7b":        32768,
     "qwen2.5:14b":       32768,

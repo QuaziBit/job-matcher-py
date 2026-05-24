@@ -555,6 +555,58 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
             })
         self.assertEqual(captured.get("model"), "gpt-4o")
 
+    async def test_analyze_restores_env_after_call(self):
+        """After analyze_job runs, ANALYSIS_MODE and model env vars must be
+        restored to their pre-request values so the Launcher's configured
+        defaults are not permanently overwritten."""
+        import os
+        r = await self.client.post("/api/resumes/add", data={
+            "label": "v1", "content": MOCK_RESUME_DEVSECOPS
+        })
+        rid = r.json()["resume_id"]
+
+        with patch("main.scrape_job") as mock_scrape:
+            mock_scrape.return_value = {
+                "title": "Dev", "company": "Co", "location": "VA",
+                "raw_description": MOCK_JOB_DEVSECOPS
+            }
+            j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/env-restore"})
+        jid = j.json()["job_id"]
+
+        # Set a known baseline in the env before the request
+        orig_mode  = os.environ.get("ANALYSIS_MODE")
+        orig_model = os.environ.get("ANTHROPIC_MODEL")
+        os.environ["ANALYSIS_MODE"]   = "standard"
+        os.environ["ANTHROPIC_MODEL"] = "claude-haiku-original"
+
+        try:
+            with patch("main.analyze_match") as mock_analyze:
+                mock_analyze.return_value = {
+                    "score": 3, "adjusted_score": 3,
+                    "penalty_breakdown": {"blockers":0,"majors":0,"minors":0,"blocker_penalty":0,"major_penalty":0,"minor_penalty":0,"count_penalty":0,"total_penalty":0},
+                    "matched_skills": [], "missing_skills": [],
+                    "reasoning": "ok.", "llm_provider": "anthropic", "llm_model": "claude-haiku-override",
+                }
+                await self.client.post(f"/api/jobs/{jid}/analyze", data={
+                    "resume_id": rid, "provider": "anthropic",
+                    "analysis_mode": "detailed", "cloud_model": "claude-haiku-override"
+                })
+
+            # After the request, env must be back to the pre-request values
+            self.assertEqual(os.environ.get("ANALYSIS_MODE"),   "standard",
+                             "ANALYSIS_MODE was not restored after analyze_job")
+            self.assertEqual(os.environ.get("ANTHROPIC_MODEL"), "claude-haiku-original",
+                             "ANTHROPIC_MODEL was not restored after analyze_job")
+        finally:
+            if orig_mode is None:
+                os.environ.pop("ANALYSIS_MODE", None)
+            else:
+                os.environ["ANALYSIS_MODE"] = orig_mode
+            if orig_model is None:
+                os.environ.pop("ANTHROPIC_MODEL", None)
+            else:
+                os.environ["ANTHROPIC_MODEL"] = orig_model
+
     async def test_get_provider_models_anthropic(self):
         """GET /api/providers/models?provider=anthropic returns known models."""
         resp = await self.client.get("/api/providers/models?provider=anthropic")
@@ -1000,8 +1052,12 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
 
     @patch("main.scrape_job")
     @patch("main.analyze_match")
-    async def test_job_detail_preselects_last_analysis_mode(self, mock_analyze, mock_scrape):
-        """Job detail page should pre-select the analysis mode from the last analysis."""
+    async def test_job_detail_analysis_mode_reflects_env_not_last_analysis(self, mock_analyze, mock_scrape):
+        """Job detail analysis_mode should always reflect the env-configured default,
+        not the mode used in the last analysis. The last analysis mode is shown in
+        the history list; the Run New Analysis card must not silently override the
+        Launcher-configured default."""
+        import os
         mock_scrape.return_value = {
             "title": "Dev", "company": "Co", "location": "VA",
             "raw_description": MOCK_JOB_DEVSECOPS
@@ -1011,7 +1067,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
             "penalty_breakdown": {"blockers":0,"majors":0,"minors":0,"blocker_penalty":0,"major_penalty":0,"minor_penalty":0,"count_penalty":0,"total_penalty":0},
             "matched_skills": ["Python"], "missing_skills": [],
             "reasoning": "ok.", "llm_provider": "anthropic", "llm_model": anthropic_model(),
-            "analysis_mode": "fast",
+            "analysis_mode": "detailed",
         }
 
         r = await self.client.post("/api/resumes/add", data={
@@ -1021,15 +1077,21 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         j = await self.client.post("/api/jobs/add", data={"url": "https://example.com/job/preselect-mode"})
         jid = j.json()["job_id"]
 
-        await self.client.post(f"/api/jobs/{jid}/analyze", data={
-            "resume_id": rid, "provider": "anthropic", "analysis_mode": "fast"
-        })
-
-        resp = await self.client.get(f"/job/{jid}")
-        self.assertEqual(resp.status_code, 200)
-        # Analysis mode pre-selection is now served via /api/jobs/{id}/detail
-        detail = await self.client.get(f"/api/jobs/{jid}/detail")
-        self.assertEqual(detail.json()["analysis_mode"], "fast")
+        # Run analysis with 'detailed' mode — different from the env default
+        orig_mode = os.environ.get("ANALYSIS_MODE")
+        os.environ["ANALYSIS_MODE"] = "standard"
+        try:
+            await self.client.post(f"/api/jobs/{jid}/analyze", data={
+                "resume_id": rid, "provider": "anthropic", "analysis_mode": "detailed"
+            })
+            detail = await self.client.get(f"/api/jobs/{jid}/detail")
+            # Must return the env default ('standard'), NOT the last analysis mode ('detailed')
+            self.assertEqual(detail.json()["analysis_mode"], "standard")
+        finally:
+            if orig_mode is None:
+                os.environ.pop("ANALYSIS_MODE", None)
+            else:
+                os.environ["ANALYSIS_MODE"] = orig_mode
 
     @patch("main.scrape_job")
     async def test_job_detail_no_analyses_uses_env_defaults(self, mock_scrape):

@@ -618,12 +618,30 @@ async def analyze_job(
 
     try:
         import time as _time
-        # Apply analysis_mode, ollama_model, and cloud_model from form if provided
+        # Apply analysis_mode, ollama_model, and cloud_model for this request only.
+        # We save the current env values and restore them after the call so that
+        # the Launcher's configured defaults are never permanently overwritten.
+        # (Previously os.environ was mutated without restoring, causing the job
+        # detail page to show the last-used analysis mode instead of the configured
+        # default, and making the Launcher mode selector appear out of sync.)
         _valid_modes = {"fast", "standard", "detailed"}
+        _env_overrides: dict[str, tuple[str | None, str]] = {}  # key -> (old_val, new_val)
+
+        def _override_env(key: str, value: str) -> None:
+            _env_overrides[key] = (os.environ.get(key), value)
+            os.environ[key] = value
+
+        def _restore_env() -> None:
+            for key, (old_val, _) in _env_overrides.items():
+                if old_val is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old_val
+
         if analysis_mode and analysis_mode in _valid_modes:
-            os.environ["ANALYSIS_MODE"] = analysis_mode
+            _override_env("ANALYSIS_MODE", analysis_mode)
         if ollama_model and provider == "ollama":
-            os.environ["OLLAMA_MODEL"] = ollama_model
+            _override_env("OLLAMA_MODEL", ollama_model)
         if cloud_model:
             _model_env = {
                 "anthropic": "ANTHROPIC_MODEL",
@@ -631,10 +649,13 @@ async def analyze_job(
                 "gemini":    "GEMINI_MODEL",
             }
             if env_key := _model_env.get(provider):
-                os.environ[env_key] = cloud_model
-        _start           = _time.monotonic()
-        result           = await analyze_match(resume["content"], job["raw_description"], provider)
-        duration_seconds = int(_time.monotonic() - _start)
+                _override_env(env_key, cloud_model)
+        try:
+            _start           = _time.monotonic()
+            result           = await analyze_match(resume["content"], job["raw_description"], provider)
+            duration_seconds = int(_time.monotonic() - _start)
+        finally:
+            _restore_env()
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except Exception as e:
@@ -1656,7 +1677,11 @@ async def get_job_detail(job_id: int, db: aiosqlite.Connection = Depends(get_db)
         "gemini_model":     last_model if last_provider == "gemini"    else gemini_model(),
         "text_quality":     text_quality,
         "comparison":       comparison,
-        "analysis_mode":    analyses[0].get("analysis_mode") or os.getenv("ANALYSIS_MODE", "standard") if analyses else os.getenv("ANALYSIS_MODE", "standard"),
+        # Always reflect the Launcher-configured default, not the last analysis mode.
+        # The last analysis mode is already visible in the analyses history list;
+        # pre-selecting it in the Run New Analysis card would silently override
+        # whatever the user has configured in the Launcher.
+        "analysis_mode":    os.getenv("ANALYSIS_MODE", "standard"),
         "salary_estimate":  salary_data,
         "has_salary_in_jd": _job_has_salary(job.get("raw_description", "")),
         "last_resume_id":   last_resume_id,

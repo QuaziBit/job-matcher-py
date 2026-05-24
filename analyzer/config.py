@@ -103,8 +103,6 @@ MODEL_MAX_MODE = {
     "deepseek-r1:14b": "detailed",
     "deepseek-r1:32b": "detailed",
     "deepseek-r1:70b": "detailed",
-    # Nemotron
-    "nemotron-3-nano:latest": "fast",
     # Qwen
     "qwen2.5:7b":   "standard",
     "qwen2.5:14b":  "detailed",
