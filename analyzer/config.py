@@ -44,6 +44,31 @@ MODE_CONFIG = {
         "suggestions": True,
         "num_predict": 4096,
     },
+    # Thinking-model variants — same caps regardless of mode (thinking tokens
+    # exhaust the budget before JSON output; fixed snippet/count keeps it stable).
+    # num_predict is mode num_predict * 2, capped at 8192.
+    # suggestions follows the base mode (off for fast/standard, on for detailed).
+    "fast_thinking": {
+        "snippet_len":  60,
+        "max_matched":  10,
+        "max_missing":   7,
+        "suggestions": False,
+        "num_predict": 1600,   # 800 * 2
+    },
+    "standard_thinking": {
+        "snippet_len":  60,
+        "max_matched":  10,
+        "max_missing":   7,
+        "suggestions": False,
+        "num_predict": 3600,   # 1800 * 2
+    },
+    "detailed_thinking": {
+        "snippet_len":  60,
+        "max_matched":  10,
+        "max_missing":   7,
+        "suggestions": True,
+        "num_predict": 8192,   # 4096 * 2, capped
+    },
 }
 
 # Estimated response time in seconds per mode (used by frontend progress bar)
@@ -130,6 +155,7 @@ THINKING_MODELS: set[str] = {
     "deepseek-r1:671b",
     "qwq:32b",
 }
+
 
 
 def is_thinking_model(model_name: str) -> bool:

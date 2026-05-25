@@ -536,21 +536,32 @@ async def call_ollama_thinking(resume: str, job_description: str) -> dict:
     Splitting into two focused calls keeps each response within the model's
     self-imposed completion limit:
       Call A — score + reasoning + matched_skills
-      Call B — missing_skills + suggestions
+      Call B — missing_skills + suggestions (suggestions only in detailed mode)
     Results are merged into the standard analysis dict.
     """
-    cfg   = get_mode_config()
-    model = ollama_model()
+    model          = ollama_model()
+    requested_mode = os.getenv("ANALYSIS_MODE", "standard").lower()
+    actual_mode    = cap_mode_for_model(requested_mode, model)
 
-    # Compact config for thinking models — shorter snippets, fewer items
-    cfg = dict(cfg)
-    cfg["snippet_len"] = min(cfg.get("snippet_len", 100), 60)
-    cfg["max_matched"] = min(cfg.get("max_matched", 15), 10)
-    cfg["max_missing"] = min(cfg.get("max_missing", 10), 7)
+    if actual_mode != requested_mode:
+        logger.warning(
+            f"⚠ {model} max mode is '{actual_mode}' — "
+            f"downgrading from '{requested_mode}' to '{actual_mode}'"
+        )
 
-    slen     = cfg["snippet_len"]
-    mmatched = cfg["max_matched"]
-    mmissing = cfg["max_missing"]
+    cfg = MODE_CONFIG[f"{actual_mode}_thinking"]
+
+    slen             = cfg["snippet_len"]
+    mmatched         = cfg["max_matched"]
+    mmissing         = cfg["max_missing"]
+    suggestions_on   = cfg["suggestions"]
+    num_predict_thinking = cfg["num_predict"]
+    logger.info(
+        f"→ thinking mode={actual_mode} model={model} "
+        f"num_predict={num_predict_thinking} "
+        f"max_matched={mmatched} max_missing={mmissing} "
+        f"suggestions={suggestions_on}"
+    )
     timeout  = int(os.getenv("OLLAMA_TIMEOUT", "600"))
     user_msg = build_user_prompt(resume, job_description)
     user_msg_b = user_msg + "\n\nRemember: respond with ONLY a JSON object starting with '{'. No prose."
@@ -570,7 +581,7 @@ async def call_ollama_thinking(resume: str, job_description: str) -> dict:
         f'"jd_snippet": "<{slen} chars max>", "resume_snippet": "<{slen} chars max>"}}]}}'
     )
     num_predict_a = safe_num_predict(
-        sys_a + user_msg_b, model_name=model, desired_output=2000
+        sys_a + user_msg_b, model_name=model, desired_output=num_predict_thinking
     )
     payload_a = {
         "model": model,
@@ -583,16 +594,24 @@ async def call_ollama_thinking(resume: str, job_description: str) -> dict:
         "options": {"temperature": 0.2, "num_predict": num_predict_a, "think": False},
     }
 
-    # ── Call B: missing_skills + suggestions ──────────────────────────────────
-    sys_b = thinking_prefix + (
-        f"You are an expert technical recruiter. Evaluate resume vs job description.\n\n"
-        f"Return ONLY this JSON with at most {mmissing} missing skills and 3 suggestions:\n"
-        f'{{"missing_skills": [{{"skill": "...", "severity": "blocker|major|minor", '
-        f'"requirement_type": "hard|preferred|bonus", "jd_snippet": "<{slen} chars max>"}}], '
-        f'"suggestions": [{{"title": "...", "detail": "..."}}]}}'
-    )
+    # ── Call B: missing_skills + (suggestions if mode allows) ───────────────────
+    if suggestions_on:
+        sys_b = thinking_prefix + (
+            f"You are an expert technical recruiter. Evaluate resume vs job description.\n\n"
+            f"Return ONLY this JSON with at most {mmissing} missing skills and 3 suggestions:\n"
+            f'{{"missing_skills": [{{"skill": "...", "severity": "blocker|major|minor", '
+            f'"requirement_type": "hard|preferred|bonus", "jd_snippet": "<{slen} chars max>"}}], '
+            f'"suggestions": [{{"title": "...", "detail": "..."}}]}}'
+        )
+    else:
+        sys_b = thinking_prefix + (
+            f"You are an expert technical recruiter. Evaluate resume vs job description.\n\n"
+            f"Return ONLY this JSON with at most {mmissing} missing skills:\n"
+            f'{{"missing_skills": [{{"skill": "...", "severity": "blocker|major|minor", '
+            f'"requirement_type": "hard|preferred|bonus", "jd_snippet": "<{slen} chars max>"}}]}}'
+        )
     num_predict_b = safe_num_predict(
-        sys_b + user_msg_b, model_name=model, desired_output=2000
+        sys_b + user_msg_b, model_name=model, desired_output=num_predict_thinking
     )
     payload_b = {
         "model": model,
@@ -673,10 +692,10 @@ async def call_ollama_thinking(resume: str, job_description: str) -> dict:
     suggestions = result_b.get("suggestions", [])
 
     # ── Apply penalty pipeline (same as call_ollama_chunked) ──────────────────
-    parsed_matched     = parse_matched_skills(matched)[:cfg["max_matched"]]
-    parsed_missing     = parse_missing_skills(missing)[:cfg["max_missing"]]
+    parsed_matched     = parse_matched_skills(matched)[:mmatched]
+    parsed_missing     = parse_missing_skills(missing)[:mmissing]
     parsed_missing     = keyword_boost(parsed_missing, job_description)
-    parsed_suggestions = parse_suggestions(suggestions) if suggestions else []
+    parsed_suggestions = parse_suggestions(suggestions) if (suggestions and suggestions_on) else []
 
     adjusted_score, penalty_breakdown = compute_adjusted_score(score, parsed_missing)
 
@@ -690,7 +709,7 @@ async def call_ollama_thinking(resume: str, job_description: str) -> dict:
         "suggestions":       parsed_suggestions,
         "llm_provider":      "ollama",
         "llm_model":         model,
-        "analysis_mode":     cfg.get("mode", "detailed"),
+        "analysis_mode":     actual_mode,
         "retry_count":       0,
         "used_fallback":     False,
         "validation_errors": "",

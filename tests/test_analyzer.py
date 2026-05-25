@@ -400,8 +400,17 @@ class TestCallOllamaThinking(unittest.TestCase):
             "suggestions": [{"title": "Add AWS", "detail": "Mention AWS experience."}]
         })
         mock_client_cls.return_value = self._mock_responses(body_a, body_b)
-        from analyzer.llm import call_ollama_thinking
-        result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        import os
+        orig = os.environ.get("ANALYSIS_MODE")
+        os.environ["ANALYSIS_MODE"] = "detailed"  # suggestions only enabled in detailed mode
+        try:
+            from analyzer.llm import call_ollama_thinking
+            result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+        finally:
+            if orig is None:
+                os.environ.pop("ANALYSIS_MODE", None)
+            else:
+                os.environ["ANALYSIS_MODE"] = orig
         self.assertEqual(result["score"], 4)
         self.assertEqual(result["reasoning"], "Strong match.")
         self.assertEqual(len(result["matched_skills"]), 1)
@@ -491,6 +500,103 @@ class TestCallOllamaThinking(unittest.TestCase):
         result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
         self.assertLess(result["adjusted_score"], result["score"])
 
+    @patch("analyzer.llm.ollama_model", return_value="gemma4:26b")
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_respects_requested_mode(self, mock_client_cls, _mock_model):
+        """call_ollama_thinking uses the requested mode when the model supports it.
+        Previously the function always ran with get_mode_config() (env default)
+        and never called cap_mode_for_model, so the mode was not respected."""
+        import json, os
+        body_a = json.dumps({"score": 3, "reasoning": "ok.", "matched_skills": []})
+        body_b = json.dumps({"missing_skills": [], "suggestions": []})
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        orig = os.environ.get("ANALYSIS_MODE")
+        os.environ["ANALYSIS_MODE"] = "fast"
+        try:
+            from analyzer.llm import call_ollama_thinking
+            result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+            self.assertEqual(result["analysis_mode"], "fast",
+                             "thinking path must honour the requested mode")
+        finally:
+            if orig is None:
+                os.environ.pop("ANALYSIS_MODE", None)
+            else:
+                os.environ["ANALYSIS_MODE"] = orig
+
+    @patch("analyzer.llm.ollama_model", return_value="deepseek-r1:7b")
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_caps_mode_for_model(self, mock_client_cls, _mock_model):
+        """call_ollama_thinking caps mode to the model's max when requested mode
+        exceeds capability. deepseek-r1:7b max is 'standard'; requesting 'detailed'
+        must be downgraded."""
+        import json, os
+        body_a = json.dumps({"score": 3, "reasoning": "ok.", "matched_skills": []})
+        body_b = json.dumps({"missing_skills": [], "suggestions": []})
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        orig = os.environ.get("ANALYSIS_MODE")
+        os.environ["ANALYSIS_MODE"] = "detailed"
+        try:
+            from analyzer.llm import call_ollama_thinking
+            result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+            self.assertEqual(result["analysis_mode"], "standard",
+                             "deepseek-r1:7b max is standard — detailed must be capped")
+        finally:
+            if orig is None:
+                os.environ.pop("ANALYSIS_MODE", None)
+            else:
+                os.environ["ANALYSIS_MODE"] = orig
+
+    @patch("analyzer.llm.ollama_model", return_value="gemma4:26b")
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_fast_mode_disables_suggestions(self, mock_client_cls, _mock_model):
+        """In fast/standard mode, thinking path must not return suggestions.
+        suggestions are only enabled in detailed mode."""
+        import json, os
+        body_a = json.dumps({"score": 3, "reasoning": "ok.", "matched_skills": []})
+        # Call B returns suggestions — they must be discarded in fast mode
+        body_b = json.dumps({
+            "missing_skills": [{"skill": "AWS", "severity": "minor",
+                                 "requirement_type": "preferred", "jd_snippet": "AWS"}],
+            "suggestions": [{"title": "Add AWS", "detail": "Get AWS certified."}]
+        })
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        orig = os.environ.get("ANALYSIS_MODE")
+        os.environ["ANALYSIS_MODE"] = "fast"
+        try:
+            from analyzer.llm import call_ollama_thinking
+            result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+            self.assertEqual(result["suggestions"], [],
+                             "fast mode must not return suggestions from thinking path")
+        finally:
+            if orig is None:
+                os.environ.pop("ANALYSIS_MODE", None)
+            else:
+                os.environ["ANALYSIS_MODE"] = orig
+
+    @patch("analyzer.llm.ollama_model", return_value="gemma4:26b")
+    @patch("analyzer.llm.httpx.AsyncClient")
+    def test_detailed_mode_enables_suggestions(self, mock_client_cls, _mock_model):
+        """In detailed mode, thinking path must return suggestions."""
+        import json, os
+        body_a = json.dumps({"score": 4, "reasoning": "Strong match.", "matched_skills": []})
+        body_b = json.dumps({
+            "missing_skills": [],
+            "suggestions": [{"title": "Add AWS", "detail": "Get AWS certified."}]
+        })
+        mock_client_cls.return_value = self._mock_responses(body_a, body_b)
+        orig = os.environ.get("ANALYSIS_MODE")
+        os.environ["ANALYSIS_MODE"] = "detailed"
+        try:
+            from analyzer.llm import call_ollama_thinking
+            result = run(call_ollama_thinking(MOCK_RESUME_DEVSECOPS, MOCK_JOB_DEVSECOPS))
+            self.assertEqual(len(result["suggestions"]), 1,
+                             "detailed mode must return suggestions from thinking path")
+        finally:
+            if orig is None:
+                os.environ.pop("ANALYSIS_MODE", None)
+            else:
+                os.environ["ANALYSIS_MODE"] = orig
+
 
 class TestEscapeControlChars(unittest.TestCase):
     """Tests for analyzer.parsers._escape_control_chars."""
@@ -558,6 +664,57 @@ class TestEscapeControlChars(unittest.TestCase):
         result = _parse_response(raw)
         self.assertEqual(result["score"], 4)
         self.assertEqual(len(result["matched_skills"]), 1)
+
+
+class TestModeConfig(unittest.TestCase):
+    """Tests for MODE_CONFIG structure including thinking-model variants."""
+
+    def test_base_modes_present(self):
+        from analyzer.config import MODE_CONFIG
+        for mode in ("fast", "standard", "detailed"):
+            self.assertIn(mode, MODE_CONFIG, f"Missing base mode: {mode}")
+
+    def test_thinking_modes_present(self):
+        from analyzer.config import MODE_CONFIG
+        for mode in ("fast_thinking", "standard_thinking", "detailed_thinking"):
+            self.assertIn(mode, MODE_CONFIG, f"Missing thinking mode: {mode}")
+
+    def test_thinking_modes_have_required_keys(self):
+        from analyzer.config import MODE_CONFIG
+        for mode in ("fast_thinking", "standard_thinking", "detailed_thinking"):
+            cfg = MODE_CONFIG[mode]
+            for key in ("snippet_len", "max_matched", "max_missing", "suggestions", "num_predict"):
+                self.assertIn(key, cfg, f"{mode} missing key: {key}")
+
+    def test_thinking_snippet_len_fixed_at_60(self):
+        from analyzer.config import MODE_CONFIG
+        for mode in ("fast_thinking", "standard_thinking", "detailed_thinking"):
+            self.assertEqual(MODE_CONFIG[mode]["snippet_len"], 60,
+                             f"{mode} snippet_len must be 60")
+
+    def test_thinking_max_matched_fixed_at_10(self):
+        from analyzer.config import MODE_CONFIG
+        for mode in ("fast_thinking", "standard_thinking", "detailed_thinking"):
+            self.assertEqual(MODE_CONFIG[mode]["max_matched"], 10,
+                             f"{mode} max_matched must be 10")
+
+    def test_thinking_max_missing_fixed_at_7(self):
+        from analyzer.config import MODE_CONFIG
+        for mode in ("fast_thinking", "standard_thinking", "detailed_thinking"):
+            self.assertEqual(MODE_CONFIG[mode]["max_missing"], 7,
+                             f"{mode} max_missing must be 7")
+
+    def test_thinking_num_predict_is_doubled_base(self):
+        from analyzer.config import MODE_CONFIG
+        self.assertEqual(MODE_CONFIG["fast_thinking"]["num_predict"],     1600)  # 800 * 2
+        self.assertEqual(MODE_CONFIG["standard_thinking"]["num_predict"], 3600)  # 1800 * 2
+        self.assertEqual(MODE_CONFIG["detailed_thinking"]["num_predict"], 8192)  # 4096 * 2 capped
+
+    def test_thinking_suggestions_follow_base_mode(self):
+        from analyzer.config import MODE_CONFIG
+        self.assertFalse(MODE_CONFIG["fast_thinking"]["suggestions"])
+        self.assertFalse(MODE_CONFIG["standard_thinking"]["suggestions"])
+        self.assertTrue(MODE_CONFIG["detailed_thinking"]["suggestions"])
 
 
 class TestModelCapMode(unittest.TestCase):
