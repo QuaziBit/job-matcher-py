@@ -408,7 +408,7 @@ label {
 .pill {
   display: inline-flex;
   align-items: center;
-  padding: 3px 8px;
+  padding: 3px 4px;
   border-radius: 2px;
   font-size: 11px;
   font-family: var(--font-mono);

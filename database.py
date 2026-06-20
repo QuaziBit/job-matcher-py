@@ -162,7 +162,7 @@ async def init_db():
             "ALTER TABLE company_meta ADD COLUMN indeed_url TEXT DEFAULT ''",
             "ALTER TABLE company_meta ADD COLUMN indeed_rating REAL DEFAULT NULL",
             "ALTER TABLE company_meta ADD COLUMN indeed_review_count INTEGER DEFAULT NULL",
-"ALTER TABLE jobs ADD COLUMN company_url TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN company_url TEXT DEFAULT ''",
             "ALTER TABLE company_meta ADD COLUMN company_url TEXT DEFAULT ''",
         ]:
             try:

@@ -4,6 +4,7 @@ analyzer/llm.py — LLM call helpers and public analyze_match entry point.
 
 import logging
 import os
+import json
 import re
 
 import anthropic
@@ -13,11 +14,15 @@ from analyzer.config import (
     MAX_RETRIES, MODE_CONFIG,
     get_mode_config, ollama_base_url, ollama_model,
     anthropic_model, openai_model, gemini_model,
-    cap_mode_for_model,
+    cap_mode_for_model, is_thinking_model,
 )
 from analyzer.parsers import parse_response, repair_truncated_json, sanitize_json, _escape_control_chars
 from ollama_utils import safe_num_predict, estimate_tokens, get_context_window
-from analyzer.penalties import validate_llm_output, partial_fallback_analysis, auto_correct_llm_output
+from analyzer.penalties import (
+    validate_llm_output, partial_fallback_analysis, auto_correct_llm_output,
+    compute_adjusted_score,
+)
+from analyzer.skills_helpers import parse_matched_skills, parse_missing_skills, parse_suggestions, keyword_boost
 from analyzer.prompts import (
     build_system_prompt, build_user_prompt,
     build_chunk1_prompt, build_chunk2_prompt,
@@ -279,7 +284,6 @@ async def call_ollama_once(resume: str, job_description: str, resume_snippet: bo
                     f"(overhead~{overhead_buf} tokens, new available={new_available})"
                 )
 
-    from analyzer.config import is_thinking_model
     if is_thinking_model(model):
         # Thinking models need a larger output budget — the detailed JSON schema
         # with 15 matched skills, snippets, missing skills, and suggestions
@@ -415,17 +419,54 @@ def _strip_thinking(raw: str | None) -> str:
     """
     if not raw:
         return raw or ""
-    import re as _re
     # Strip <think>...</think> blocks
-    raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL)
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
     # Strip "Thinking Process:" narrative blocks — everything up to the first { or [
-    m = _re.search(r"[{\[]", raw)
+    m = re.search(r"[{\[]", raw)
     if m and m.start() > 0:
         preamble = raw[:m.start()]
         # Only strip if it looks like a thinking preamble, not legitimate text
         if any(marker in preamble for marker in ("Thinking Process", "thinking process", "Let me analyze", "I need to")):
             raw = raw[m.start():]
     return raw.strip()
+
+
+def _clean_chunk_text(raw: str) -> str:
+    """Strip thinking preamble and markdown fences — shared first step
+    for all chunk parsers before the repair-pipeline loop runs."""
+    raw = _strip_thinking(raw)
+    return re.sub(r"```(?:json)?", "", raw).strip()
+
+
+def _iter_repaired_json_dicts(cleaned: str):
+    """
+    Yield successively-repaired parses of `cleaned` as dicts, trying (in order):
+      1. as-is
+      2. control-chars escaped
+      3. truncated JSON repaired (missing closing braces)
+      4. repaired + control-chars escaped
+      5. repaired + sanitized quotes
+    Stops yielding once an attempt raises — callers should `continue` past
+    a non-matching dict by simply not returning, so the generator advances.
+    Used by both _parse_chunk and _parse_score_chunk so the cleaning and
+    repair logic lives in exactly one place.
+    """
+    attempts = [
+        lambda s: s,
+        lambda s: _escape_control_chars(s),
+        lambda s: repair_truncated_json(s),
+        lambda s: repair_truncated_json(_escape_control_chars(s)),
+        lambda s: sanitize_json(repair_truncated_json(s)),
+    ]
+    for fn in attempts:
+        try:
+            candidate = fn(cleaned)
+            match = re.search(r"\{.*\}", candidate, re.DOTALL)
+            if not match:
+                continue
+            yield json.loads(match.group())
+        except Exception:
+            continue
 
 
 def _parse_chunk(raw: str | None, key: str, chunk_name: str) -> list | dict | None:
@@ -438,33 +479,14 @@ def _parse_chunk(raw: str | None, key: str, chunk_name: str) -> list | dict | No
       4. sanitize quotes
     Returns the value or None if all passes fail.
     """
-    import json as _json, re
     if not raw:
         return None
 
-    raw     = _strip_thinking(raw)
-    cleaned = re.sub(r"```(?:json)?", "", raw).strip()
+    cleaned = _clean_chunk_text(raw)
 
-    attempts = [
-        lambda s: s,
-        lambda s: _escape_control_chars(s),
-        lambda s: repair_truncated_json(s),
-        lambda s: repair_truncated_json(_escape_control_chars(s)),
-        lambda s: sanitize_json(repair_truncated_json(s)),
-    ]
-
-    for fn in attempts:
-        try:
-            candidate = fn(cleaned)
-            match = re.search(r"\{.*\}", candidate, re.DOTALL)
-            if not match:
-                continue
-            data = _json.loads(match.group())
-            if key not in data:
-                continue
+    for data in _iter_repaired_json_dicts(cleaned):
+        if key in data:
             return data[key]
-        except Exception:
-            continue
 
     # Last resort: if the array was truncated mid-item, try to extract
     # only the complete items by finding the last valid closing brace
@@ -476,7 +498,7 @@ def _parse_chunk(raw: str | None, key: str, chunk_name: str) -> list | dict | No
             last_complete = array_content.rfind("}")
             if last_complete > 0:
                 truncated_fixed = '{"'  + key + '": [' + array_content[:last_complete + 1] + ']}'
-                data = _json.loads(truncated_fixed)
+                data = json.loads(truncated_fixed)
                 if key in data:
                     return data[key]
     except Exception:
@@ -492,28 +514,13 @@ def _parse_score_chunk(raw: str | None) -> tuple[int | None, str]:
     Parse chunk 1 — returns (score, reasoning).
     Applies repair pipeline so truncated JSON (missing closing brace) still parses.
     """
-    import json as _json, re
     if not raw:
         return None, ""
 
-    raw     = _strip_thinking(raw)
-    cleaned = re.sub(r"```(?:json)?", "", raw).strip()
+    cleaned = _clean_chunk_text(raw)
 
-    attempts = [
-        lambda s: s,
-        lambda s: _escape_control_chars(s),
-        lambda s: repair_truncated_json(s),
-        lambda s: repair_truncated_json(_escape_control_chars(s)),
-        lambda s: sanitize_json(repair_truncated_json(s)),
-    ]
-
-    for fn in attempts:
+    for data in _iter_repaired_json_dicts(cleaned):
         try:
-            candidate = fn(cleaned)
-            match = re.search(r"\{.*\}", candidate, re.DOTALL)
-            if not match:
-                continue
-            data      = _json.loads(match.group())
             raw_score = data.get("score", 0)
             score     = round(float(raw_score))
             reasoning = data.get("reasoning", "")
@@ -647,9 +654,6 @@ async def call_ollama_thinking(resume: str, job_description: str) -> dict:
         _log_chunk(f"→ thinking call B reasoning:\n{think_b}")
 
     # ── Parse and merge ───────────────────────────────────────────────────────
-    import json as _json
-    from analyzer.skills_helpers import parse_matched_skills, parse_missing_skills, parse_suggestions, keyword_boost
-    from analyzer.penalties import compute_adjusted_score
 
     result_a: dict = {}
     result_b: dict = {}
@@ -657,7 +661,7 @@ async def call_ollama_thinking(resume: str, job_description: str) -> dict:
     for raw, target in [(raw_a, "A"), (raw_b, "B")]:
         try:
             cleaned = re.sub(r"```(?:json)?", "", raw).strip()
-            parsed  = _json.loads(cleaned)
+            parsed  = json.loads(cleaned)
             if target == "A":
                 result_a = parsed
             else:
@@ -665,7 +669,7 @@ async def call_ollama_thinking(resume: str, job_description: str) -> dict:
         except Exception:
             try:
                 repaired = repair_truncated_json(raw)
-                parsed   = _json.loads(repaired)
+                parsed   = json.loads(repaired)
                 if target == "A":
                     result_a = parsed
                 else:
@@ -791,8 +795,6 @@ async def call_ollama_chunked(resume: str, job_description: str) -> dict:
         logger.info(f"→ chunk 4 OK: {len(suggestions)} suggestions")
 
     # ── Merge and apply penalty pipeline ─────────────────────────────────────
-    from analyzer.skills_helpers import parse_matched_skills, parse_missing_skills, parse_suggestions, keyword_boost
-    from analyzer.penalties import compute_adjusted_score
 
     parsed_matched = parse_matched_skills(matched)[:cfg["max_matched"]]
     parsed_missing = parse_missing_skills(missing)[:cfg["max_missing"]]
@@ -852,21 +854,19 @@ async def analyze_match(resume: str, job_description: str, provider: str = "anth
                 f"→ attempt {attempt + 1}/{MAX_RETRIES} provider={provider} "
                 f"resume={len(resume)} chars jd={len(job_description)} chars"
             )
-            import analyzer.llm as _self
             if provider == "ollama":
-                from analyzer.config import is_thinking_model
                 current_model = ollama_model()
                 if is_thinking_model(current_model):
                     logger.info(f"→ Routing thinking model {current_model!r} to thinking path")
-                    result = await _self.call_ollama_thinking(resume, job_description)
+                    result = await call_ollama_thinking(resume, job_description)
                 else:
-                    result = await _self.call_ollama_chunked(resume, job_description)
+                    result = await call_ollama_chunked(resume, job_description)
             elif provider == "openai":
-                result = await _self.call_openai_once(resume, job_description)
+                result = await call_openai_once(resume, job_description)
             elif provider == "gemini":
-                result = await _self.call_gemini_once(resume, job_description)
+                result = await call_gemini_once(resume, job_description)
             else:
-                result = await _self.call_anthropic_once(resume, job_description)
+                result = await call_anthropic_once(resume, job_description)
         except Exception as e:
             last_error = e
             logger.error(f"✗ LLM attempt {attempt + 1} failed: {e}")

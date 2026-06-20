@@ -1,8 +1,10 @@
+import hashlib
 import json
 import logging
 import os
 import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -147,10 +149,9 @@ async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
             ) as cur:
                 for row in await cur.fetchall():
                     row = dict(row)
-                    import json as _json
                     signals = []
                     try:
-                        signals = _json.loads(row.get("llm_signals") or "[]")
+                        signals = json.loads(row.get("llm_signals") or "[]")
                     except Exception:
                         pass
                     meta_map[row["company_name"]] = {
@@ -517,7 +518,6 @@ async def add_job_manual(
     db: aiosqlite.Connection = Depends(get_db),
 ):
     """Store a manually pasted job description (no URL scraping)."""
-    import hashlib
 
     description = clean_text(description.strip())
     if len(description) < 50:
@@ -926,7 +926,6 @@ async def update_job_url(
     db: aiosqlite.Connection = Depends(get_db),
 ):
     """Update or clear the source URL of a saved job."""
-    import hashlib
 
     url = url.strip()
 
@@ -1108,7 +1107,6 @@ async def crawl_company_endpoint(company_name: str = Form("")):
     # Return cached result if fresh (within 7 days)
     cached = await get_company_meta(company_name)
     if cached:
-        from datetime import datetime, timezone
         try:
             raw = cached["crawled_at"].replace("Z", "+00:00")
             crawled_at = datetime.fromisoformat(raw)
@@ -1328,14 +1326,12 @@ async def vet_company_endpoint(
     # Check 7-day cache first (skip if force rescan)
     row = await get_company_meta(company_name)
     if not force_rescan and row and row.get("llm_assessed_at"):
-        from datetime import datetime, timedelta
         try:
             assessed_at = datetime.fromisoformat(row["llm_assessed_at"])
             if datetime.utcnow() - assessed_at < timedelta(days=CACHE_TTL_DAYS):
-                import json as _json
                 signals = []
                 try:
-                    signals = _json.loads(row.get("llm_signals") or "[]")
+                    signals = json.loads(row.get("llm_signals") or "[]")
                 except Exception:
                     pass
                 logger.info(f"✓ Returning cached vetting for: {company_name!r}")
