@@ -39,6 +39,37 @@ def format_duration(seconds: int) -> str:
     return f"{m}:{s:02d}" if m > 0 else f"{s}s"
 
 
+def is_valid_url(url: str) -> bool:
+    """Return True if `url` starts with http:// or https://. Empty string is
+    treated as invalid (callers decide whether empty is acceptable for their
+    field — this only validates non-empty values)."""
+    return bool(url) and url.startswith(("http://", "https://"))
+
+
+def truncate_description(text: str, max_chars: int = 8000) -> str:
+    """Truncate a job description to `max_chars`, appending a notice if cut.
+    Used before sending text to the LLM analysis pipeline so oversized pastes
+    don't blow the context budget."""
+    if len(text) > max_chars:
+        return text[:max_chars] + "\n\n[...truncated for analysis]"
+    return text
+
+
+def error_response(message: str, status_code: int = 400, **extra):
+    """
+    Build a JSONResponse for the error shape used throughout main.py:
+    `JSONResponse({"error": message, ...}, status_code=N)`.
+
+    `**extra` covers the handful of call sites that attach additional
+    fields alongside the error, e.g. error_response("...", 409, job_id=existing_id).
+
+    Import-local to avoid pulling fastapi into utils.py's import surface
+    for every caller — only routes that need this call it.
+    """
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"error": message, **extra}, status_code=status_code)
+
+
 # ── Resume comparison helpers ─────────────────────────────────────────────────
 
 def has_blocker(missing_skills: list) -> bool:

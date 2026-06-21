@@ -23,7 +23,7 @@ from analyzer.llm import _verbose
 from analyzer.config import anthropic_model, openai_model, gemini_model
 from analyzer.known_models import KNOWN_MODELS
 from health import run_health_checks
-from utils import build_comparison, clean_text
+from utils import build_comparison, clean_text, error_response, is_valid_url, truncate_description
 
 load_dotenv()
 
@@ -76,7 +76,7 @@ async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
             rows = [dict(r) for r in await cur.fetchall()]
     except Exception as e:
         logger.error(f"\u2717 get_vetting_data DB error: {e}")
-        return JSONResponse({"error": "Database error"}, status_code=500)
+        return error_response("Database error", 500)
 
     # Group by company
     companies = {}
@@ -211,21 +211,21 @@ async def jobs_list(
     logger_jl = logging.getLogger("jobs_list")
 
     if page < 1:
-        return JSONResponse({"error": f"invalid page {page!r} — must be a positive integer"}, status_code=400)
+        return error_response(f"invalid page {page!r} — must be a positive integer", 400)
     if per_page < 0:
-        return JSONResponse({"error": f"invalid per_page {per_page!r} — must be 0 (all) or a positive integer"}, status_code=400)
+        return error_response(f"invalid per_page {per_page!r} — must be 0 (all) or a positive integer", 400)
 
     valid_statuses = {"", "not_applied", "applied", "interviewing", "offered", "rejected"}
     if status not in valid_statuses:
-        return JSONResponse({"error": f"invalid status {status!r} — must be one of: not_applied, applied, interviewing, offered, rejected"}, status_code=400)
+        return error_response(f"invalid status {status!r} — must be one of: not_applied, applied, interviewing, offered, rejected", 400)
 
     valid_scores = {"", "0", "1", "2", "3", "4", "5"}
     if score not in valid_scores:
-        return JSONResponse({"error": f"invalid score {score!r} — must be one of: 0, 1, 2, 3, 4, 5"}, status_code=400)
+        return error_response(f"invalid score {score!r} — must be one of: 0, 1, 2, 3, 4, 5", 400)
 
     valid_providers = {"", "anthropic", "openai", "gemini", "ollama", "manual"}
     if provider not in valid_providers:
-        return JSONResponse({"error": f"invalid provider {provider!r} — must be one of: anthropic, openai, gemini, ollama, manual"}, status_code=400)
+        return error_response(f"invalid provider {provider!r} — must be one of: anthropic, openai, gemini, ollama, manual", 400)
 
     logger_jl.info(f"→ /api/jobs/list page={page} per_page={per_page} search={search!r} status={status!r} score={score!r} provider={provider!r} added_days={added_days!r} date_from={date_from!r} date_to={date_to!r}")
 
@@ -314,7 +314,7 @@ async def jobs_list(
             total = row[0] if row else 0
     except Exception as e:
         logger_jl.error(f"✗ count query failed: {e}")
-        return JSONResponse({"error": "Failed to load jobs from database. Check the terminal for details."}, status_code=500)
+        return error_response("Failed to load jobs from database. Check the terminal for details.", 500)
 
     total_pages = 1
     if per_page > 0 and total > 0:
@@ -336,7 +336,7 @@ async def jobs_list(
             jobs = [dict(r) for r in rows]
     except Exception as e:
         logger_jl.error(f"✗ jobs query failed: {e}")
-        return JSONResponse({"error": "Failed to load jobs from database. Check the terminal for details."}, status_code=500)
+        return error_response("Failed to load jobs from database. Check the terminal for details.", 500)
 
     for job in jobs:
         job["is_manual"] = (job.get("url") or "").startswith("manual://")
@@ -367,21 +367,18 @@ async def scrape_job_preview(url: str = Form(...), db: aiosqlite.Connection = De
             existing = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ scrape_job_preview DB error checking duplicate: {e}")
-        return JSONResponse({"error": "Database error."}, status_code=500)
+        return error_response("Database error.", 500)
 
     if existing:
-        return JSONResponse(
-            {"error": "This URL has already been added.", "job_id": existing[0]},
-            status_code=409,
-        )
+        return error_response("This URL has already been added.", 409, job_id=existing[0])
 
     try:
         data = await scrape_job(url)
     except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=422)
+        return error_response(str(e), 422)
     except Exception as e:
         logger.error(f"✗ scrape_job_preview unexpected error: {e}")
-        return JSONResponse({"error": "Unexpected error while scraping."}, status_code=500)
+        return error_response("Unexpected error while scraping.", 500)
 
     description = clean_text(data["raw_description"])
 
@@ -419,28 +416,24 @@ async def save_job_preview(
     company     = company.strip()
     location    = location.strip()
     company_url = company_url.strip()
-    if company_url and not company_url.startswith(("http://", "https://")):
+    if company_url and not is_valid_url(company_url):
         company_url = ""
     description = clean_text(description.strip())
 
     if len(description) < 50:
-        return JSONResponse({"error": "Description is too short (minimum 50 characters)."}, status_code=422)
+        return error_response("Description is too short (minimum 50 characters).", 422)
 
     try:
         async with db.execute("SELECT id FROM jobs WHERE url = ?", (url,)) as cur:
             existing = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ save_job_preview DB error checking duplicate: {e}")
-        return JSONResponse({"error": "Database error."}, status_code=500)
+        return error_response("Database error.", 500)
 
     if existing:
-        return JSONResponse(
-            {"error": "This URL has already been added.", "job_id": existing[0]},
-            status_code=409,
-        )
+        return error_response("This URL has already been added.", 409, job_id=existing[0])
 
-    if len(description) > 8000:
-        description = description[:8000] + "\n\n[...truncated for analysis]"
+    description = truncate_description(description)
 
     try:
         async with db.execute(
@@ -451,7 +444,7 @@ async def save_job_preview(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ save_job_preview DB insert error: {e}")
-        return JSONResponse({"error": "Failed to save job."}, status_code=500)
+        return error_response("Failed to save job.", 500)
 
     # Sync company_url to company_meta
     if company and company_url:
@@ -480,18 +473,18 @@ async def add_job(url: str = Form(...), db: aiosqlite.Connection = Depends(get_d
             existing = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ add_job DB error checking duplicate: {e}")
-        return JSONResponse({"error": "Database error. Check the terminal for details."}, status_code=500)
+        return error_response("Database error. Check the terminal for details.", 500)
 
     if existing:
-        return JSONResponse({"error": "This URL has already been added.", "job_id": existing[0]}, status_code=409)
+        return error_response("This URL has already been added.", 409, job_id=existing[0])
 
     try:
         data = await scrape_job(url)
     except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=422)
+        return error_response(str(e), 422)
     except Exception as e:
         logger.error(f"✗ add_job unexpected scrape error: {e}")
-        return JSONResponse({"error": "Unexpected error while scraping. Check the terminal for details."}, status_code=500)
+        return error_response("Unexpected error while scraping. Check the terminal for details.", 500)
 
     try:
         async with db.execute(
@@ -502,7 +495,7 @@ async def add_job(url: str = Form(...), db: aiosqlite.Connection = Depends(get_d
         await db.commit()
     except Exception as e:
         logger.error(f"✗ add_job DB insert error: {e}")
-        return JSONResponse({"error": "Failed to save job. Check the terminal for details."}, status_code=500)
+        return error_response("Failed to save job. Check the terminal for details.", 500)
 
     return JSONResponse({"job_id": job_id, "title": data["title"], "company": data["company"]})
 
@@ -521,16 +514,13 @@ async def add_job_manual(
 
     description = clean_text(description.strip())
     if len(description) < 50:
-        return JSONResponse(
-            {"error": "Description is too short (minimum 50 characters)."},
-            status_code=422,
-        )
+        return error_response("Description is too short (minimum 50 characters).", 422)
 
     title         = title.strip()   or "Untitled Job"
     company       = company.strip() or ""
     source_url    = source_url.strip()
     company_url   = company_url.strip()
-    if company_url and not company_url.startswith(("http://", "https://")):
+    if company_url and not is_valid_url(company_url):
         company_url = ""
 
     # Use provided URL if given, otherwise generate a synthetic manual:// URL
@@ -552,16 +542,12 @@ async def add_job_manual(
             existing = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ add_job_manual DB error checking duplicate: {e}")
-        return JSONResponse({"error": "Database error. Check the terminal for details."}, status_code=500)
+        return error_response("Database error. Check the terminal for details.", 500)
 
     if existing:
-        return JSONResponse(
-            {"error": "This job has already been added.", "job_id": existing[0]},
-            status_code=409,
-        )
+        return error_response("This job has already been added.", 409, job_id=existing[0])
 
-    if len(description) > 8000:
-        description = description[:8000] + "\n\n[...truncated for analysis]"
+    description = truncate_description(description)
 
     try:
         async with db.execute(
@@ -572,7 +558,7 @@ async def add_job_manual(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ add_job_manual DB insert error: {e}")
-        return JSONResponse({"error": "Failed to save job. Check the terminal for details."}, status_code=500)
+        return error_response("Failed to save job. Check the terminal for details.", 500)
 
     # Sync company_url to company_meta if provided
     if company and company_url:
@@ -614,7 +600,7 @@ async def analyze_job(
         raise
     except Exception as e:
         logger.error(f"✗ analyze_job DB error fetching job/resume: {e}")
-        return JSONResponse({"error": "Database error. Check the terminal for details."}, status_code=500)
+        return error_response("Database error. Check the terminal for details.", 500)
 
     try:
         import time as _time
@@ -657,10 +643,10 @@ async def analyze_job(
         finally:
             _restore_env()
     except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=422)
+        return error_response(str(e), 422)
     except Exception as e:
         logger.error(f"✗ analyze_job LLM error for job {job_id}: {e}")
-        return JSONResponse({"error": "Analysis failed unexpectedly. Check the terminal for details."}, status_code=500)
+        return error_response("Analysis failed unexpectedly. Check the terminal for details.", 500)
 
     matched_v1 = json.dumps([
         s["skill"] if isinstance(s, dict) else s
@@ -703,7 +689,7 @@ async def analyze_job(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ analyze_job DB insert error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to save analysis. Check the terminal for details."}, status_code=500)
+        return error_response("Failed to save analysis. Check the terminal for details.", 500)
 
     return JSONResponse(result)
 
@@ -724,7 +710,7 @@ async def estimate_job_salary(
             job = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ estimate_job_salary DB error fetching job {job_id}: {e}")
-        return JSONResponse({"error": "Database error. Check the terminal for details."}, status_code=500)
+        return error_response("Database error. Check the terminal for details.", 500)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -736,10 +722,7 @@ async def estimate_job_salary(
     if provider == "ollama":
         current_model = _ollama_model()
         if any(m in current_model for m in SALARY_INCOMPATIBLE_MODELS):
-            return JSONResponse(
-                {"error": f"{current_model} is not supported for salary estimation. Please switch to Anthropic or llama3.1:8b."},
-                status_code=422,
-            )
+            return error_response(f"{current_model} is not supported for salary estimation. Please switch to Anthropic or llama3.1:8b.", 422)
 
     has_salary = _job_has_salary(job["raw_description"] or "")
 
@@ -777,10 +760,10 @@ async def estimate_job_salary(
             )
             result["source"] = "estimated"
     except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=422)
+        return error_response(str(e), 422)
     except Exception as e:
         logger.error(f"✗ estimate_job_salary LLM error for job {job_id}: {e}")
-        return JSONResponse({"error": "Salary estimation failed unexpectedly. Check the terminal for details."}, status_code=500)
+        return error_response("Salary estimation failed unexpectedly. Check the terminal for details.", 500)
 
     try:
         await db.execute(
@@ -802,7 +785,7 @@ async def clear_salary_estimate(job_id: int, db: aiosqlite.Connection = Depends(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ clear_salary_estimate DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to clear salary estimate."}, status_code=500)
+        return error_response("Failed to clear salary estimate.", 500)
     return JSONResponse({"ok": True})
 
 
@@ -832,7 +815,7 @@ async def upsert_application(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ upsert_application DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to save application. Check the terminal for details."}, status_code=500)
+        return error_response("Failed to save application. Check the terminal for details.", 500)
     return JSONResponse({"ok": True})
 
 
@@ -848,7 +831,7 @@ async def delete_analysis(analysis_id: int, db: aiosqlite.Connection = Depends(g
         raise
     except Exception as e:
         logger.error(f"✗ delete_analysis DB error for analysis {analysis_id}: {e}")
-        return JSONResponse({"error": "Failed to delete analysis."}, status_code=500)
+        return error_response("Failed to delete analysis.", 500)
     return JSONResponse({"ok": True})
 
 
@@ -859,7 +842,7 @@ async def delete_job(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
         await db.commit()
     except Exception as e:
         logger.error(f"✗ delete_job DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to delete job."}, status_code=500)
+        return error_response("Failed to delete job.", 500)
     return JSONResponse({"ok": True})
 
 
@@ -875,7 +858,7 @@ async def get_job_email(job_id: int, db: aiosqlite.Connection = Depends(get_db))
             row = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ get_job_email DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Database error"}, status_code=500)
+        return error_response("Database error", 500)
     if not row:
         return JSONResponse({"email": None})
     return JSONResponse({"email": {"id": row[0], "raw_html": row[1], "created_at": row[2]}})
@@ -890,7 +873,7 @@ async def save_job_email(
     """Save or replace the email HTML for a job."""
     raw_html = raw_html.strip()
     if not raw_html:
-        return JSONResponse({"error": "raw_html is required"}, status_code=422)
+        return error_response("raw_html is required", 422)
     try:
         await db.execute(
             """INSERT INTO job_emails (job_id, raw_html)
@@ -902,7 +885,7 @@ async def save_job_email(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ save_job_email DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to save email."}, status_code=500)
+        return error_response("Failed to save email.", 500)
     logger.info(f"✓ Email saved for job {job_id}")
     return JSONResponse({"ok": True})
 
@@ -915,7 +898,7 @@ async def delete_job_email(job_id: int, db: aiosqlite.Connection = Depends(get_d
         await db.commit()
     except Exception as e:
         logger.error(f"✗ delete_job_email DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to delete email."}, status_code=500)
+        return error_response("Failed to delete email.", 500)
     return JSONResponse({"ok": True})
 
 
@@ -930,17 +913,14 @@ async def update_job_url(
     url = url.strip()
 
     # Validate URL if provided
-    if url and not (url.startswith("http://") or url.startswith("https://")):
-        return JSONResponse(
-            {"error": "URL must start with http:// or https://"},
-            status_code=422,
-        )
+    if url and not is_valid_url(url):
+        return error_response("URL must start with http:// or https://", 422)
 
     # Check job exists
     async with db.execute("SELECT id, raw_description FROM jobs WHERE id = ?", (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
-        return JSONResponse({"error": "Job not found."}, status_code=404)
+        return error_response("Job not found.", 404)
 
     # If clearing URL, regenerate synthetic manual:// URL
     if not url:
@@ -953,7 +933,7 @@ async def update_job_url(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_url DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to update URL."}, status_code=500)
+        return error_response("Failed to update URL.", 500)
 
     logger.info(f"✓ Job {job_id} URL updated to: {url}")
     return JSONResponse({"ok": True, "url": url})
@@ -969,19 +949,19 @@ async def update_job_title(
     title = title.strip()
 
     if not title:
-        return JSONResponse({"error": "Title cannot be empty."}, status_code=422)
+        return error_response("Title cannot be empty.", 422)
 
     async with db.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
-        return JSONResponse({"error": "Job not found."}, status_code=404)
+        return error_response("Job not found.", 404)
 
     try:
         await db.execute("UPDATE jobs SET title = ? WHERE id = ?", (title, job_id))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_title DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to update title."}, status_code=500)
+        return error_response("Failed to update title.", 500)
 
     logger.info(f"✓ Job {job_id} title updated to: {title}")
     return JSONResponse({"ok": True, "title": title})
@@ -999,7 +979,7 @@ async def update_job_company(
     async with db.execute("SELECT id, company FROM jobs WHERE id = ?", (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
-        return JSONResponse({"error": "Job not found."}, status_code=404)
+        return error_response("Job not found.", 404)
 
     old_company = (row[1] or "").strip()
 
@@ -1008,7 +988,7 @@ async def update_job_company(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_company DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to update company."}, status_code=500)
+        return error_response("Failed to update company.", 500)
 
     # Rename company_meta row so vetting/crawl data follows the new name
     if old_company and company and old_company != company:
@@ -1038,14 +1018,14 @@ async def update_job_location(
     async with db.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
-        return JSONResponse({"error": "Job not found."}, status_code=404)
+        return error_response("Job not found.", 404)
 
     try:
         await db.execute("UPDATE jobs SET location = ? WHERE id = ?", (location, job_id))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_location DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to update location."}, status_code=500)
+        return error_response("Failed to update location.", 500)
 
     logger.info(f"✓ Job {job_id} location updated to: {location!r}")
     return JSONResponse({"ok": True, "location": location})
@@ -1059,13 +1039,13 @@ async def update_job_company_url(
 ):
     """Update the company URL for a saved job and sync to company_meta."""
     company_url = company_url.strip()
-    if company_url and not company_url.startswith(("http://", "https://")):
-        return JSONResponse({"error": "company_url must start with http:// or https://"}, status_code=422)
+    if company_url and not is_valid_url(company_url):
+        return error_response("company_url must start with http:// or https://", 422)
 
     async with db.execute("SELECT id, company FROM jobs WHERE id = ?", (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
-        return JSONResponse({"error": "Job not found."}, status_code=404)
+        return error_response("Job not found.", 404)
 
     job_company = (row[1] or "").strip()
 
@@ -1074,7 +1054,7 @@ async def update_job_company_url(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_company_url DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Failed to update company URL."}, status_code=500)
+        return error_response("Failed to update company URL.", 500)
 
     # Sync to company_meta so vetting page sees it too
     if job_company and company_url:
@@ -1102,7 +1082,7 @@ async def crawl_company_endpoint(company_name: str = Form("")):
     """
     company_name = company_name.strip()
     if not company_name:
-        return JSONResponse({"error": "company_name is required."}, status_code=422)
+        return error_response("company_name is required.", 422)
 
     # Return cached result if fresh (within 7 days)
     cached = await get_company_meta(company_name)
@@ -1134,7 +1114,7 @@ async def get_company_meta_endpoint(company_name: str = ""):
     """Return cached company_meta for a given company name, or null if not crawled."""
     company_name = company_name.strip()
     if not company_name:
-        return JSONResponse({"error": "company_name is required."}, status_code=422)
+        return error_response("company_name is required.", 422)
     row = await get_company_meta(company_name)
     if row is None:
         return JSONResponse({"ok": True, "cached": False, "company_name": company_name})
@@ -1161,7 +1141,7 @@ async def update_company_meta_endpoint(
     """
     company_name = company_name.strip()
     if not company_name:
-        return JSONResponse({"error": "company_name is required."}, status_code=422)
+        return error_response("company_name is required.", 422)
 
     data = {}
 
@@ -1172,15 +1152,15 @@ async def update_company_meta_endpoint(
             if 1.0 <= v <= 5.0:
                 data["glassdoor_rating"] = v
             else:
-                return JSONResponse({"error": "glassdoor_rating must be between 1 and 5."}, status_code=422)
+                return error_response("glassdoor_rating must be between 1 and 5.", 422)
         except ValueError:
-            return JSONResponse({"error": "glassdoor_rating must be a number."}, status_code=422)
+            return error_response("glassdoor_rating must be a number.", 422)
 
     if glassdoor_review_count.strip():
         try:
             data["glassdoor_review_count"] = int(glassdoor_review_count.strip())
         except ValueError:
-            return JSONResponse({"error": "glassdoor_review_count must be an integer."}, status_code=422)
+            return error_response("glassdoor_review_count must be an integer.", 422)
 
     if indeed_rating.strip():
         try:
@@ -1188,15 +1168,15 @@ async def update_company_meta_endpoint(
             if 1.0 <= v <= 5.0:
                 data["indeed_rating"] = v
             else:
-                return JSONResponse({"error": "indeed_rating must be between 1 and 5."}, status_code=422)
+                return error_response("indeed_rating must be between 1 and 5.", 422)
         except ValueError:
-            return JSONResponse({"error": "indeed_rating must be a number."}, status_code=422)
+            return error_response("indeed_rating must be a number.", 422)
 
     if indeed_review_count.strip():
         try:
             data["indeed_review_count"] = int(indeed_review_count.strip())
         except ValueError:
-            return JSONResponse({"error": "indeed_review_count must be an integer."}, status_code=422)
+            return error_response("indeed_review_count must be an integer.", 422)
 
     # BBB grade
     if bbb_rating.strip():
@@ -1212,12 +1192,12 @@ async def update_company_meta_endpoint(
     ]:
         val = val.strip()
         if val:
-            if not val.startswith("http"):
-                return JSONResponse({"error": f"{field} must start with http:// or https://"}, status_code=422)
+            if not is_valid_url(val):
+                return error_response(f"{field} must start with http:// or https://", 422)
             data[field] = val
 
     if not data:
-        return JSONResponse({"error": "No fields provided to update."}, status_code=422)
+        return error_response("No fields provided to update.", 422)
 
     await upsert_company_meta(company_name, data)
     row = await get_company_meta(company_name) or {}
@@ -1239,7 +1219,7 @@ async def delete_company_meta_endpoint(
     """Delete all company_meta for a company — ratings, URLs, and LLM vetting."""
     company_name = company_name.strip()
     if not company_name:
-        return JSONResponse({"error": "company_name is required."}, status_code=422)
+        return error_response("company_name is required.", 422)
     await db.execute("DELETE FROM company_meta WHERE company_name = ?", (company_name,))
     await db.commit()
     logger.info(f"✓ delete_company_meta: company={company_name!r}")
@@ -1265,19 +1245,19 @@ async def parse_company_snippet_endpoint(
     model        = model.strip()
 
     if not company_name:
-        return JSONResponse({"error": "company_name is required."}, status_code=422)
+        return error_response("company_name is required.", 422)
     if not text:
-        return JSONResponse({"error": "text is required."}, status_code=422)
+        return error_response("text is required.", 422)
     if len(text) > 5000:
-        return JSONResponse({"error": "text too long (max 5000 chars)."}, status_code=422)
+        return error_response("text too long (max 5000 chars).", 422)
 
     try:
         data = await parse_company_snippet(text, provider, model)
     except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=422)
+        return error_response(str(e), 422)
     except Exception as e:
         logger.error(f"✗ parse_company_snippet({company_name!r}): {e}")
-        return JSONResponse({"error": "Parsing failed — please try again."}, status_code=500)
+        return error_response("Parsing failed — please try again.", 500)
 
     if not data:
         return JSONResponse({
@@ -1317,7 +1297,7 @@ async def vet_company_endpoint(
     """
     company_name = company_name.strip()
     if not company_name:
-        return JSONResponse({"error": "company_name is required."}, status_code=422)
+        return error_response("company_name is required.", 422)
 
     provider = provider.strip().lower() or "anthropic"
     model    = model.strip()
@@ -1364,10 +1344,10 @@ async def vet_company_endpoint(
         result = await vet_company(company_name, row or {}, provider, model)
     except ValueError as e:
         logger.error(f"✗ vet_company failed for {company_name!r}: {e}")
-        return JSONResponse({"error": str(e)}, status_code=422)
+        return error_response(str(e), 422)
     except Exception as e:
         logger.error(f"✗ vet_company unexpected error for {company_name!r}: {e}")
-        return JSONResponse({"error": "Vetting failed — please try again."}, status_code=500)
+        return error_response("Vetting failed — please try again.", 500)
 
     # Cache result
     await upsert_company_vetting(
@@ -1403,7 +1383,7 @@ async def validate_email_domain_endpoint(
     """
     email = email.strip()
     if not email:
-        return JSONResponse({"error": "email is required."}, status_code=422)
+        return error_response("email is required.", 422)
 
     result = await validate_email_domain(email, db)
     logger.info(
@@ -1462,20 +1442,14 @@ async def extract_resume_file(file: UploadFile = File(...)):
             text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
         else:
-            return JSONResponse(
-                {"error": "Unsupported file type. Please upload a TXT, PDF, or DOCX file."},
-                status_code=422,
-            )
+            return error_response("Unsupported file type. Please upload a TXT, PDF, or DOCX file.", 422)
     except Exception as e:
         logger.error(f"✗ extract_resume_file error for {filename}: {e}")
-        return JSONResponse({"error": f"Failed to extract text from file: {e}"}, status_code=500)
+        return error_response(f"Failed to extract text from file: {e}", 500)
 
     text = clean_text(text.strip())
     if len(text) < 50:
-        return JSONResponse(
-            {"error": "Could not extract enough text from the file (minimum 50 characters)."},
-            status_code=422,
-        )
+        return error_response("Could not extract enough text from the file (minimum 50 characters).", 422)
     return JSONResponse({"text": text, "char_count": len(text)})
 
 
@@ -1493,7 +1467,7 @@ async def add_resume(
         await db.commit()
     except Exception as e:
         logger.error(f"✗ add_resume DB error: {e}")
-        return JSONResponse({"error": "Failed to save resume. Check the terminal for details."}, status_code=500)
+        return error_response("Failed to save resume. Check the terminal for details.", 500)
     return JSONResponse({"resume_id": resume_id, "label": label.strip()})
 
 
@@ -1508,9 +1482,9 @@ async def get_resume(resume_id: int, db: aiosqlite.Connection = Depends(get_db))
             row = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ get_resume DB error for id={resume_id}: {e}")
-        return JSONResponse({"error": "Database error"}, status_code=500)
+        return error_response("Database error", 500)
     if not row:
-        return JSONResponse({"error": "Resume not found."}, status_code=404)
+        return error_response("Resume not found.", 404)
     return JSONResponse(dict(row))
 
 
@@ -1521,7 +1495,7 @@ async def delete_resume(resume_id: int, db: aiosqlite.Connection = Depends(get_d
         await db.commit()
     except Exception as e:
         logger.error(f"✗ delete_resume DB error for resume {resume_id}: {e}")
-        return JSONResponse({"error": "Failed to delete resume."}, status_code=500)
+        return error_response("Failed to delete resume.", 500)
     return JSONResponse({"ok": True})
 
 
@@ -1532,7 +1506,7 @@ async def get_description(job_id: int, db: aiosqlite.Connection = Depends(get_db
             row = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ get_description DB error for job {job_id}: {e}")
-        return JSONResponse({"error": "Database error."}, status_code=500)
+        return error_response("Database error.", 500)
     if not row:
         raise HTTPException(status_code=404)
     return JSONResponse({"description": row["raw_description"]})
@@ -1548,7 +1522,7 @@ async def get_job_detail(job_id: int, db: aiosqlite.Connection = Depends(get_db)
             job = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ get_job_detail DB error fetching job {job_id}: {e}")
-        return JSONResponse({"error": "Database error"}, status_code=500)
+        return error_response("Database error", 500)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1571,7 +1545,7 @@ async def get_job_detail(job_id: int, db: aiosqlite.Connection = Depends(get_db)
             resumes = [dict(r) for r in await cur.fetchall()]
     except Exception as e:
         logger.error(f"✗ get_job_detail DB error fetching related data for job {job_id}: {e}")
-        return JSONResponse({"error": "Database error"}, status_code=500)
+        return error_response("Database error", 500)
 
     # Parse JSON fields in analyses
     for analysis in analyses:
@@ -1726,7 +1700,7 @@ async def list_resumes(db: aiosqlite.Connection = Depends(get_db)):
             resumes = [dict(r) for r in await cur.fetchall()]
     except Exception as e:
         logger.error(f"\u2717 list_resumes DB error: {e}")
-        return JSONResponse({"error": "Database error"}, status_code=500)
+        return error_response("Database error", 500)
     return JSONResponse({"resumes": resumes})
 
 
