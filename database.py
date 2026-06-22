@@ -31,6 +31,8 @@ if sys.platform != "win32" and sys.platform != "darwin":
 
 import aiosqlite
 
+import queries
+
 
 def _db_path() -> str:
     """Read DB_PATH at call time so tests can override it via os.environ."""
@@ -49,122 +51,11 @@ async def get_db():
 
 async def init_db():
     async with aiosqlite.connect(_db_path()) as db:
-        await db.executescript("""
-            CREATE TABLE IF NOT EXISTS resumes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                label TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS jobs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                url TEXT NOT NULL UNIQUE,
-                title TEXT,
-                company TEXT,
-                location TEXT,
-                company_url TEXT DEFAULT '',
-                raw_description TEXT,
-                scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS analyses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id INTEGER NOT NULL,
-                resume_id INTEGER NOT NULL,
-                score INTEGER NOT NULL,
-                adjusted_score INTEGER NOT NULL DEFAULT 0,
-                penalty_breakdown TEXT DEFAULT '{}',
-                matched_skills TEXT,
-                missing_skills TEXT,
-                reasoning TEXT,
-                llm_provider TEXT DEFAULT 'anthropic',
-                llm_model TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
-                FOREIGN KEY (resume_id) REFERENCES resumes(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS applications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id INTEGER NOT NULL UNIQUE,
-                status TEXT DEFAULT 'not_applied',
-                recruiter_name TEXT,
-                recruiter_email TEXT,
-                recruiter_phone TEXT,
-                notes TEXT,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS job_emails (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id INTEGER NOT NULL UNIQUE,
-                raw_html TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS company_meta (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                company_name TEXT NOT NULL UNIQUE,
-                glassdoor_url TEXT DEFAULT '',
-                glassdoor_rating REAL DEFAULT NULL,
-                glassdoor_review_count INTEGER DEFAULT NULL,
-                linkedin_url TEXT DEFAULT '',
-                linkedin_employee_count TEXT DEFAULT '',
-                linkedin_founded TEXT DEFAULT '',
-                bbb_url TEXT DEFAULT '',
-                bbb_rating TEXT DEFAULT '',
-                indeed_url TEXT DEFAULT '',
-                indeed_rating REAL DEFAULT NULL,
-                company_url TEXT DEFAULT '',
-                indeed_review_count INTEGER DEFAULT NULL,
-                crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                llm_assessment TEXT DEFAULT NULL,
-                llm_risk_level TEXT DEFAULT NULL,
-                llm_signals TEXT DEFAULT NULL,
-                llm_provider TEXT DEFAULT NULL,
-                llm_model TEXT DEFAULT NULL,
-                llm_assessed_at TIMESTAMP DEFAULT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS domain_mx_cache (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                domain      TEXT NOT NULL UNIQUE,
-                has_mx      INTEGER NOT NULL DEFAULT 0,
-                mx_records  TEXT DEFAULT '',
-                checked_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
+        await db.executescript(queries.SCHEMA)
         await db.commit()
 
         # Migrations: add columns to existing databases that predate these fields
-        for migration in [
-            "ALTER TABLE analyses ADD COLUMN llm_model TEXT DEFAULT ''",
-            "ALTER TABLE analyses ADD COLUMN adjusted_score INTEGER DEFAULT 0",
-            "ALTER TABLE analyses ADD COLUMN penalty_breakdown TEXT DEFAULT '{}'",
-            "ALTER TABLE analyses ADD COLUMN matched_skills_v2 TEXT DEFAULT '[]'",
-            "ALTER TABLE analyses ADD COLUMN missing_skills_v2 TEXT DEFAULT '[]'",
-            "ALTER TABLE analyses ADD COLUMN suggestions TEXT DEFAULT '[]'",
-            "ALTER TABLE analyses ADD COLUMN validation_errors TEXT DEFAULT ''",
-            "ALTER TABLE analyses ADD COLUMN retry_count INTEGER DEFAULT 0",
-            "ALTER TABLE analyses ADD COLUMN used_fallback INTEGER DEFAULT 0",
-            "ALTER TABLE analyses ADD COLUMN duration_seconds INTEGER DEFAULT 0",
-            "ALTER TABLE analyses ADD COLUMN analysis_mode TEXT DEFAULT 'standard'",
-            "ALTER TABLE jobs ADD COLUMN salary_estimate TEXT DEFAULT ''",
-            "ALTER TABLE company_meta ADD COLUMN llm_assessment TEXT DEFAULT NULL",
-            "ALTER TABLE company_meta ADD COLUMN llm_risk_level TEXT DEFAULT NULL",
-            "ALTER TABLE company_meta ADD COLUMN llm_signals TEXT DEFAULT NULL",
-            "ALTER TABLE company_meta ADD COLUMN llm_provider TEXT DEFAULT NULL",
-            "ALTER TABLE company_meta ADD COLUMN llm_model TEXT DEFAULT NULL",
-            "ALTER TABLE company_meta ADD COLUMN llm_assessed_at TIMESTAMP DEFAULT NULL",
-            "ALTER TABLE company_meta ADD COLUMN indeed_url TEXT DEFAULT ''",
-            "ALTER TABLE company_meta ADD COLUMN indeed_rating REAL DEFAULT NULL",
-            "ALTER TABLE company_meta ADD COLUMN indeed_review_count INTEGER DEFAULT NULL",
-            "ALTER TABLE jobs ADD COLUMN company_url TEXT DEFAULT ''",
-            "ALTER TABLE company_meta ADD COLUMN company_url TEXT DEFAULT ''",
-        ]:
+        for migration in queries.MIGRATIONS:
             try:
                 await db.execute(migration)
                 await db.commit()
@@ -191,7 +82,7 @@ async def get_company_meta(company_name: str) -> dict | None:
     async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM company_meta WHERE company_name = ?",
+            queries.GET_COMPANY_META,
             (company_name,)
         ) as cur:
             row = await cur.fetchone()
@@ -208,7 +99,7 @@ async def upsert_company_meta(company_name: str, data: dict) -> None:
         # Nothing to write — just ensure the row exists
         async with aiosqlite.connect(_db_path()) as db:
             await db.execute(
-                "INSERT OR IGNORE INTO company_meta (company_name) VALUES (?)",
+                queries.INSERT_OR_IGNORE_COMPANY_META,
                 (company_name,),
             )
             await db.commit()
@@ -219,9 +110,7 @@ async def upsert_company_meta(company_name: str, data: dict) -> None:
     values = [company_name] + [data.get(f) for f in fields]
     async with aiosqlite.connect(_db_path()) as db:
         await db.execute(
-            f"""INSERT INTO company_meta ({cols}) VALUES ({placeholders})
-               ON CONFLICT(company_name) DO UPDATE SET {set_clause},
-               crawled_at = CURRENT_TIMESTAMP""",
+            queries.UPSERT_COMPANY_META.format(cols=cols, placeholders=placeholders, set_clause=set_clause),
             values,
         )
         await db.commit()
@@ -241,16 +130,7 @@ async def upsert_company_vetting(
     signals_json = _json.dumps(signals) if signals else "[]"
     async with aiosqlite.connect(_db_path()) as db:
         await db.execute(
-            """INSERT INTO company_meta (company_name, llm_risk_level, llm_assessment,
-               llm_signals, llm_provider, llm_model, llm_assessed_at)
-               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(company_name) DO UPDATE SET
-                   llm_risk_level  = excluded.llm_risk_level,
-                   llm_assessment  = excluded.llm_assessment,
-                   llm_signals     = excluded.llm_signals,
-                   llm_provider    = excluded.llm_provider,
-                   llm_model       = excluded.llm_model,
-                   llm_assessed_at = excluded.llm_assessed_at""",
+            queries.UPSERT_COMPANY_VETTING,
             (company_name, risk_level, assessment, signals_json, provider, model),
         )
         await db.commit()

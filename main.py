@@ -24,6 +24,7 @@ from analyzer.config import anthropic_model, openai_model, gemini_model
 from analyzer.known_models import KNOWN_MODELS
 from health import run_health_checks
 from utils import build_comparison, clean_text, error_response, is_valid_url, truncate_description
+import queries as q
 
 load_dotenv()
 
@@ -65,14 +66,7 @@ async def vetting_page():
 async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
     """Return all jobs grouped by company and by recruiter for the vetting page."""
     try:
-        async with db.execute("""
-            SELECT
-                j.id, j.title, j.company, j.url, j.scraped_at,
-                a.status, a.recruiter_name, a.recruiter_email, a.recruiter_phone
-            FROM jobs j
-            LEFT JOIN applications a ON a.job_id = j.id
-            ORDER BY j.company COLLATE NOCASE, j.scraped_at DESC
-        """) as cur:
+        async with db.execute(q.GET_VETTING_ROWS) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
     except Exception as e:
         logger.error(f"\u2717 get_vetting_data DB error: {e}")
@@ -134,17 +128,8 @@ async def get_vetting_data(db: aiosqlite.Connection = Depends(get_db)):
     meta_map = {}
     if company_names:
         try:
-            placeholders = ",".join(["?"] * len(company_names))
             async with db.execute(
-                f"""SELECT company_name,
-                           company_url,
-                           glassdoor_url, glassdoor_rating, glassdoor_review_count,
-                           linkedin_url, linkedin_employee_count, linkedin_founded,
-                           bbb_url, bbb_rating,
-                           indeed_url, indeed_rating, indeed_review_count,
-                           llm_risk_level, llm_assessment,
-                           llm_signals, llm_provider, llm_model, llm_assessed_at
-                    FROM company_meta WHERE company_name IN ({placeholders})""",
+                q.get_company_meta_batch_query(len(company_names)),
                 company_names,
             ) as cur:
                 for row in await cur.fetchall():
@@ -290,24 +275,7 @@ async def jobs_list(
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
-    base_query = f"""
-        SELECT j.id, j.url, j.title, j.company, j.location, j.scraped_at,
-               COALESCE(a.status, 'not_applied') as status,
-               (SELECT score          FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as best_score,
-               (SELECT adjusted_score FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as adjusted_score,
-               (SELECT llm_provider   FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as provider,
-               (SELECT llm_model     FROM analyses WHERE job_id = j.id ORDER BY created_at DESC LIMIT 1) as last_model,
-               CASE WHEN (a.recruiter_name IS NOT NULL AND a.recruiter_name != '')
-                      OR (a.recruiter_email IS NOT NULL AND a.recruiter_email != '')
-                      OR (a.recruiter_phone IS NOT NULL AND a.recruiter_phone != '')
-                    THEN 1 ELSE 0 END as has_recruiter
-        FROM jobs j
-        LEFT JOIN applications a ON a.job_id = j.id
-        {where_sql}
-        ORDER BY j.scraped_at DESC
-    """
-
-    count_query = f"SELECT COUNT(*) FROM jobs j LEFT JOIN applications a ON a.job_id = j.id {where_sql}"
+    count_query = q.COUNT_JOBS.format(where_sql=where_sql)
     try:
         async with db.execute(count_query, args) as cur:
             row   = await cur.fetchone()
@@ -323,6 +291,7 @@ async def jobs_list(
     if page > total_pages and total_pages > 0:
         page = total_pages
 
+    base_query      = q.LIST_JOBS_PAGINATED.format(where_sql=where_sql)
     paginated_query = base_query
     paginated_args  = list(args)
     if per_page > 0:
@@ -363,7 +332,7 @@ async def scrape_job_preview(url: str = Form(...), db: aiosqlite.Connection = De
     url = url.strip()
 
     try:
-        async with db.execute("SELECT id FROM jobs WHERE url = ?", (url,)) as cur:
+        async with db.execute(q.GET_JOB_ID_BY_URL, (url,)) as cur:
             existing = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ scrape_job_preview DB error checking duplicate: {e}")
@@ -424,7 +393,7 @@ async def save_job_preview(
         return error_response("Description is too short (minimum 50 characters).", 422)
 
     try:
-        async with db.execute("SELECT id FROM jobs WHERE url = ?", (url,)) as cur:
+        async with db.execute(q.GET_JOB_ID_BY_URL, (url,)) as cur:
             existing = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ save_job_preview DB error checking duplicate: {e}")
@@ -437,7 +406,7 @@ async def save_job_preview(
 
     try:
         async with db.execute(
-            "INSERT INTO jobs (url, title, company, location, company_url, raw_description) VALUES (?, ?, ?, ?, ?, ?)",
+            q.INSERT_JOB_WITH_COMPANY_URL,
             (url, title, company, location, company_url, description),
         ) as cur:
             job_id = cur.lastrowid
@@ -450,9 +419,7 @@ async def save_job_preview(
     if company and company_url:
         try:
             await db.execute(
-                """INSERT INTO company_meta (company_name, company_url)
-                   VALUES (?, ?)
-                   ON CONFLICT(company_name) DO UPDATE SET company_url = excluded.company_url""",
+                q.SYNC_COMPANY_URL_TO_META,
                 (company, company_url),
             )
             await db.commit()
@@ -469,7 +436,7 @@ async def add_job(url: str = Form(...), db: aiosqlite.Connection = Depends(get_d
     url = url.strip()
 
     try:
-        async with db.execute("SELECT id FROM jobs WHERE url = ?", (url,)) as cur:
+        async with db.execute(q.GET_JOB_ID_BY_URL, (url,)) as cur:
             existing = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ add_job DB error checking duplicate: {e}")
@@ -488,7 +455,7 @@ async def add_job(url: str = Form(...), db: aiosqlite.Connection = Depends(get_d
 
     try:
         async with db.execute(
-            "INSERT INTO jobs (url, title, company, location, raw_description) VALUES (?, ?, ?, ?, ?)",
+            q.INSERT_JOB_NO_COMPANY_URL,
             (url, data["title"], data["company"], data["location"], clean_text(data["raw_description"])),
         ) as cur:
             job_id = cur.lastrowid
@@ -536,7 +503,7 @@ async def add_job_manual(
 
     try:
         async with db.execute(
-            "SELECT id FROM jobs WHERE url = ? OR (url = ? AND ? = '')",
+            q.GET_MANUAL_JOB_ID_BY_URL_OR_SLUG,
             (job_url, synthetic_url, source_url),
         ) as cur:
             existing = await cur.fetchone()
@@ -551,7 +518,7 @@ async def add_job_manual(
 
     try:
         async with db.execute(
-            "INSERT INTO jobs (url, title, company, location, company_url, raw_description) VALUES (?, ?, ?, ?, ?, ?)",
+            q.INSERT_JOB_WITH_COMPANY_URL,
             (job_url, title, company, location.strip(), company_url, description),
         ) as cur:
             job_id = cur.lastrowid
@@ -564,9 +531,7 @@ async def add_job_manual(
     if company and company_url:
         try:
             await db.execute(
-                """INSERT INTO company_meta (company_name, company_url)
-                   VALUES (?, ?)
-                   ON CONFLICT(company_name) DO UPDATE SET company_url = excluded.company_url""",
+                q.SYNC_COMPANY_URL_TO_META,
                 (company, company_url),
             )
             await db.commit()
@@ -587,12 +552,12 @@ async def analyze_job(
     db: aiosqlite.Connection = Depends(get_db),
 ):
     try:
-        async with db.execute("SELECT raw_description FROM jobs WHERE id = ?", (job_id,)) as cur:
+        async with db.execute(q.GET_JOB_RAW_DESCRIPTION, (job_id,)) as cur:
             job = await cur.fetchone()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        async with db.execute("SELECT content FROM resumes WHERE id = ?", (resume_id,)) as cur:
+        async with db.execute(q.GET_RESUME_CONTENT, (resume_id,)) as cur:
             resume = await cur.fetchone()
         if not resume:
             raise HTTPException(status_code=404, detail="Resume not found")
@@ -660,13 +625,7 @@ async def analyze_job(
 
     try:
         await db.execute(
-            """INSERT INTO analyses
-               (job_id, resume_id, score, adjusted_score, penalty_breakdown,
-                matched_skills, missing_skills, reasoning, llm_provider, llm_model,
-                matched_skills_v2, missing_skills_v2, suggestions,
-                validation_errors, retry_count, used_fallback, duration_seconds,
-                analysis_mode)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            q.INSERT_ANALYSIS,
             (
                 job_id, resume_id,
                 result["score"],
@@ -703,10 +662,7 @@ async def estimate_job_salary(
 ):
     """Estimate or extract salary for a job using the configured LLM."""
     try:
-        async with db.execute(
-            "SELECT title, company, location, raw_description, salary_estimate FROM jobs WHERE id = ?",
-            (job_id,)
-        ) as cur:
+        async with db.execute(q.GET_JOB_FOR_SALARY, (job_id,)) as cur:
             job = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ estimate_job_salary DB error fetching job {job_id}: {e}")
@@ -766,10 +722,7 @@ async def estimate_job_salary(
         return error_response("Salary estimation failed unexpectedly. Check the terminal for details.", 500)
 
     try:
-        await db.execute(
-            "UPDATE jobs SET salary_estimate = ? WHERE id = ?",
-            (json.dumps(result), job_id)
-        )
+        await db.execute(q.UPDATE_JOB_SALARY_ESTIMATE, (json.dumps(result), job_id))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ estimate_job_salary DB update error for job {job_id}: {e}")
@@ -781,7 +734,7 @@ async def estimate_job_salary(
 async def clear_salary_estimate(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
     """Clear a cached salary estimate so it can be re-run."""
     try:
-        await db.execute("UPDATE jobs SET salary_estimate = '' WHERE id = ?", (job_id,))
+        await db.execute(q.CLEAR_JOB_SALARY_ESTIMATE, (job_id,))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ clear_salary_estimate DB error for job {job_id}: {e}")
@@ -801,15 +754,7 @@ async def upsert_application(
 ):
     try:
         await db.execute(
-            """INSERT INTO applications (job_id, status, recruiter_name, recruiter_email, recruiter_phone, notes)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(job_id) DO UPDATE SET
-                   status=excluded.status,
-                   recruiter_name=excluded.recruiter_name,
-                   recruiter_email=excluded.recruiter_email,
-                   recruiter_phone=excluded.recruiter_phone,
-                   notes=excluded.notes,
-                   updated_at=CURRENT_TIMESTAMP""",
+            q.UPSERT_APPLICATION,
             (job_id, status, recruiter_name, recruiter_email, recruiter_phone, notes),
         )
         await db.commit()
@@ -822,10 +767,10 @@ async def upsert_application(
 @app.delete("/api/analyses/{analysis_id}")
 async def delete_analysis(analysis_id: int, db: aiosqlite.Connection = Depends(get_db)):
     try:
-        async with db.execute("SELECT id FROM analyses WHERE id = ?", (analysis_id,)) as cur:
+        async with db.execute(q.GET_ANALYSIS_ID, (analysis_id,)) as cur:
             if not await cur.fetchone():
                 raise HTTPException(status_code=404, detail="Analysis not found")
-        await db.execute("DELETE FROM analyses WHERE id = ?", (analysis_id,))
+        await db.execute(q.DELETE_ANALYSIS, (analysis_id,))
         await db.commit()
     except HTTPException:
         raise
@@ -838,7 +783,7 @@ async def delete_analysis(analysis_id: int, db: aiosqlite.Connection = Depends(g
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
     try:
-        await db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        await db.execute(q.DELETE_JOB, (job_id,))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ delete_job DB error for job {job_id}: {e}")
@@ -853,7 +798,7 @@ async def get_job_email(job_id: int, db: aiosqlite.Connection = Depends(get_db))
     """Return saved email HTML for a job, or null if none saved."""
     try:
         async with db.execute(
-            "SELECT id, raw_html, created_at FROM job_emails WHERE job_id = ?", (job_id,)
+            q.GET_JOB_EMAIL, (job_id,)
         ) as cur:
             row = await cur.fetchone()
     except Exception as e:
@@ -876,10 +821,7 @@ async def save_job_email(
         return error_response("raw_html is required", 422)
     try:
         await db.execute(
-            """INSERT INTO job_emails (job_id, raw_html)
-               VALUES (?, ?)
-               ON CONFLICT(job_id) DO UPDATE SET raw_html=excluded.raw_html,
-               created_at=CURRENT_TIMESTAMP""",
+            q.UPSERT_JOB_EMAIL,
             (job_id, raw_html),
         )
         await db.commit()
@@ -894,7 +836,7 @@ async def save_job_email(
 async def delete_job_email(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
     """Delete the saved email for a job."""
     try:
-        await db.execute("DELETE FROM job_emails WHERE job_id = ?", (job_id,))
+        await db.execute(q.DELETE_JOB_EMAIL, (job_id,))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ delete_job_email DB error for job {job_id}: {e}")
@@ -917,7 +859,7 @@ async def update_job_url(
         return error_response("URL must start with http:// or https://", 422)
 
     # Check job exists
-    async with db.execute("SELECT id, raw_description FROM jobs WHERE id = ?", (job_id,)) as cur:
+    async with db.execute(q.GET_JOB_ID_AND_DESCRIPTION, (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
         return error_response("Job not found.", 404)
@@ -929,7 +871,7 @@ async def update_job_url(
         url  = f"manual://{slug}"
 
     try:
-        await db.execute("UPDATE jobs SET url = ? WHERE id = ?", (url, job_id))
+        await db.execute(q.UPDATE_JOB_URL, (url, job_id))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_url DB error for job {job_id}: {e}")
@@ -951,13 +893,13 @@ async def update_job_title(
     if not title:
         return error_response("Title cannot be empty.", 422)
 
-    async with db.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)) as cur:
+    async with db.execute(q.GET_JOB_ID_ONLY, (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
         return error_response("Job not found.", 404)
 
     try:
-        await db.execute("UPDATE jobs SET title = ? WHERE id = ?", (title, job_id))
+        await db.execute(q.UPDATE_JOB_TITLE, (title, job_id))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_title DB error for job {job_id}: {e}")
@@ -976,7 +918,7 @@ async def update_job_company(
     """Update the company name of a saved job."""
     company = company.strip()
 
-    async with db.execute("SELECT id, company FROM jobs WHERE id = ?", (job_id,)) as cur:
+    async with db.execute(q.GET_JOB_ID_AND_COMPANY, (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
         return error_response("Job not found.", 404)
@@ -984,7 +926,7 @@ async def update_job_company(
     old_company = (row[1] or "").strip()
 
     try:
-        await db.execute("UPDATE jobs SET company = ? WHERE id = ?", (company, job_id))
+        await db.execute(q.UPDATE_JOB_COMPANY, (company, job_id))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_company DB error for job {job_id}: {e}")
@@ -994,7 +936,7 @@ async def update_job_company(
     if old_company and company and old_company != company:
         try:
             await db.execute(
-                "UPDATE company_meta SET company_name = ? WHERE company_name = ?",
+                q.RENAME_COMPANY_META,
                 (company, old_company),
             )
             await db.commit()
@@ -1015,13 +957,13 @@ async def update_job_location(
     """Update the location of a saved job."""
     location = location.strip()
 
-    async with db.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)) as cur:
+    async with db.execute(q.GET_JOB_ID_ONLY, (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
         return error_response("Job not found.", 404)
 
     try:
-        await db.execute("UPDATE jobs SET location = ? WHERE id = ?", (location, job_id))
+        await db.execute(q.UPDATE_JOB_LOCATION, (location, job_id))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_location DB error for job {job_id}: {e}")
@@ -1042,7 +984,7 @@ async def update_job_company_url(
     if company_url and not is_valid_url(company_url):
         return error_response("company_url must start with http:// or https://", 422)
 
-    async with db.execute("SELECT id, company FROM jobs WHERE id = ?", (job_id,)) as cur:
+    async with db.execute(q.GET_JOB_ID_AND_COMPANY, (job_id,)) as cur:
         row = await cur.fetchone()
     if not row:
         return error_response("Job not found.", 404)
@@ -1050,7 +992,7 @@ async def update_job_company_url(
     job_company = (row[1] or "").strip()
 
     try:
-        await db.execute("UPDATE jobs SET company_url = ? WHERE id = ?", (company_url, job_id))
+        await db.execute(q.UPDATE_JOB_COMPANY_URL, (company_url, job_id))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ update_job_company_url DB error for job {job_id}: {e}")
@@ -1060,9 +1002,7 @@ async def update_job_company_url(
     if job_company and company_url:
         try:
             await db.execute(
-                """INSERT INTO company_meta (company_name, company_url)
-                   VALUES (?, ?)
-                   ON CONFLICT(company_name) DO UPDATE SET company_url = excluded.company_url""",
+                q.SYNC_COMPANY_URL_TO_META,
                 (job_company, company_url),
             )
             await db.commit()
@@ -1220,7 +1160,7 @@ async def delete_company_meta_endpoint(
     company_name = company_name.strip()
     if not company_name:
         return error_response("company_name is required.", 422)
-    await db.execute("DELETE FROM company_meta WHERE company_name = ?", (company_name,))
+    await db.execute(q.DELETE_COMPANY_META, (company_name,))
     await db.commit()
     logger.info(f"✓ delete_company_meta: company={company_name!r}")
     return JSONResponse({"ok": True, "company": company_name})
@@ -1400,7 +1340,7 @@ async def get_mx_cache(db: aiosqlite.Connection = Depends(get_db)):
     """Return all cached MX results as {domain: {has_mx, mx_records}} map."""
     try:
         async with db.execute(
-            "SELECT domain, has_mx, mx_records FROM domain_mx_cache"
+            q.GET_MX_CACHE
         ) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
     except Exception as e:
@@ -1461,7 +1401,7 @@ async def add_resume(
 ):
     try:
         async with db.execute(
-            "INSERT INTO resumes (label, content) VALUES (?, ?)", (label.strip(), clean_text(content.strip()))
+            q.INSERT_RESUME, (label.strip(), clean_text(content.strip()))
         ) as cur:
             resume_id = cur.lastrowid
         await db.commit()
@@ -1476,7 +1416,7 @@ async def get_resume(resume_id: int, db: aiosqlite.Connection = Depends(get_db))
     """Return full content of a single resume."""
     try:
         async with db.execute(
-            "SELECT id, label, content, created_at, LENGTH(content) as char_count FROM resumes WHERE id = ?",
+            q.GET_RESUME,
             (resume_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -1491,7 +1431,7 @@ async def get_resume(resume_id: int, db: aiosqlite.Connection = Depends(get_db))
 @app.delete("/api/resumes/{resume_id}")
 async def delete_resume(resume_id: int, db: aiosqlite.Connection = Depends(get_db)):
     try:
-        await db.execute("DELETE FROM resumes WHERE id = ?", (resume_id,))
+        await db.execute(q.DELETE_RESUME, (resume_id,))
         await db.commit()
     except Exception as e:
         logger.error(f"✗ delete_resume DB error for resume {resume_id}: {e}")
@@ -1502,7 +1442,7 @@ async def delete_resume(resume_id: int, db: aiosqlite.Connection = Depends(get_d
 @app.get("/api/jobs/{job_id}/description")
 async def get_description(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
     try:
-        async with db.execute("SELECT raw_description FROM jobs WHERE id = ?", (job_id,)) as cur:
+        async with db.execute(q.GET_JOB_RAW_DESCRIPTION, (job_id,)) as cur:
             row = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ get_description DB error for job {job_id}: {e}")
@@ -1518,7 +1458,7 @@ async def get_description(job_id: int, db: aiosqlite.Connection = Depends(get_db
 async def get_job_detail(job_id: int, db: aiosqlite.Connection = Depends(get_db)):
     """Return all data needed to render the job detail page as JSON."""
     try:
-        async with db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)) as cur:
+        async with db.execute(q.GET_JOB_FULL_ROW, (job_id,)) as cur:
             job = await cur.fetchone()
     except Exception as e:
         logger.error(f"✗ get_job_detail DB error fetching job {job_id}: {e}")
@@ -1529,19 +1469,14 @@ async def get_job_detail(job_id: int, db: aiosqlite.Connection = Depends(get_db)
     job = dict(job)
 
     try:
-        async with db.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,)) as cur:
+        async with db.execute(q.GET_APPLICATION_BY_JOB, (job_id,)) as cur:
             app_row = await cur.fetchone()
         application = dict(app_row) if app_row else {}
 
-        async with db.execute("""
-            SELECT a.*, r.label as resume_label
-            FROM analyses a JOIN resumes r ON r.id = a.resume_id
-            WHERE a.job_id = ?
-            ORDER BY a.created_at DESC
-        """, (job_id,)) as cur:
+        async with db.execute(q.GET_ANALYSES_WITH_RESUME_LABEL, (job_id,)) as cur:
             analyses = [dict(r) for r in await cur.fetchall()]
 
-        async with db.execute("SELECT id, label FROM resumes ORDER BY created_at DESC") as cur:
+        async with db.execute(q.LIST_RESUME_IDS_AND_LABELS) as cur:
             resumes = [dict(r) for r in await cur.fetchall()]
     except Exception as e:
         logger.error(f"✗ get_job_detail DB error fetching related data for job {job_id}: {e}")
@@ -1612,9 +1547,7 @@ async def get_job_detail(job_id: int, db: aiosqlite.Connection = Depends(get_db)
         if job_url and not meta_url:
             try:
                 async with db.execute(
-                    """INSERT INTO company_meta (company_name, company_url)
-                       VALUES (?, ?)
-                       ON CONFLICT(company_name) DO UPDATE SET company_url = excluded.company_url""",
+                    q.SYNC_COMPANY_URL_TO_META,
                     (job["company"], job_url),
                 ) as _:
                     pass
@@ -1695,7 +1628,7 @@ async def list_resumes(db: aiosqlite.Connection = Depends(get_db)):
     """Return all saved resumes for the shared frontend."""
     try:
         async with db.execute(
-            "SELECT id, label, created_at, LENGTH(content) as char_count FROM resumes ORDER BY created_at DESC"
+            q.LIST_RESUMES_FULL
         ) as cur:
             resumes = [dict(r) for r in await cur.fetchall()]
     except Exception as e:
